@@ -157,8 +157,10 @@ class InstallManager @Inject constructor(
         // Reuse a stable session id derived from the package so the PendingIntent is unique.
         val sessionId = -(packageName.hashCode() and 0x7fff_ffff) - 1
         return try {
+            resultBus.expect(sessionId)
             packageInstaller.uninstall(packageName, resultSender(sessionId).intentSender)
-            mapResult(resultBus.await(sessionId))
+            resultBus.await(sessionId, RESULT_TIMEOUT_MS)?.let(::mapResult)
+                ?: InstallOutcome.Failure(null, "uninstall result timed out")
         } catch (e: Exception) {
             InstallOutcome.Failure(null, "uninstall error: ${e.message}")
         }
@@ -196,10 +198,17 @@ class InstallManager @Inject constructor(
                         }
                     }
                 }
+                resultBus.expect(sessionId)
                 session.commit(resultSender(sessionId).intentSender)
             }
 
-            mapResult(resultBus.await(sessionId))
+            resultBus.await(sessionId, RESULT_TIMEOUT_MS)?.let(::mapResult) ?: run {
+                // Never heard back. Abandoning frees the session if the platform still holds it open; it cannot stop
+                // a commit already under way, so the app may yet install after this failure is reported (the device's
+                // app list and, for the agent itself, its reported version then show it).
+                runCatching { packageInstaller.abandonSession(sessionId) }
+                InstallOutcome.Failure(null, "install result timed out")
+            }
         }
 
     /**
@@ -294,5 +303,10 @@ class InstallManager @Inject constructor(
         PackageInstaller.STATUS_FAILURE_STORAGE -> "FAILURE_STORAGE"
         PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "FAILURE_INCOMPATIBLE"
         else -> "STATUS_$status"
+    }
+
+    private companion object {
+        /** How long a committed session may take to report back before the install counts as failed. */
+        const val RESULT_TIMEOUT_MS = 10 * 60_000L
     }
 }
