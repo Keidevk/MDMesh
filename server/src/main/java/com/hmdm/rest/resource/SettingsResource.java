@@ -24,6 +24,7 @@ package com.hmdm.rest.resource;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.ws.rs.Consumes;
+import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
@@ -35,13 +36,17 @@ import com.hmdm.persistence.CustomerDAO;
 import com.hmdm.persistence.UnsecureDAO;
 import com.hmdm.persistence.UserRoleSettingsDAO;
 import com.hmdm.persistence.domain.UserRoleSettings;
+import com.hmdm.persistence.AndroidEnterpriseConfigDAO;
+import com.hmdm.persistence.domain.AndroidEnterpriseConfig;
 import com.hmdm.security.SecurityContext;
+import com.hmdm.service.AndroidEnterpriseService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.Authorization;
 import com.hmdm.persistence.CommonDAO;
 import com.hmdm.persistence.domain.Settings;
 import com.hmdm.rest.json.Response;
+import com.hmdm.rest.json.EnterpriseConfigRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,6 +63,8 @@ public class SettingsResource {
     private CommonDAO commonDAO;
     private UserRoleSettingsDAO userRoleSettingsDAO;
     private UnsecureDAO unsecureDAO;
+    private AndroidEnterpriseConfigDAO enterpriseConfigDAO;
+    private AndroidEnterpriseService enterpriseService;
 
     /**
      * <p>A constructor required by Swagger.</p>
@@ -66,10 +73,13 @@ public class SettingsResource {
     }
 
     @Inject
-    public SettingsResource(CommonDAO commonDAO, UserRoleSettingsDAO userRoleSettingsDAO, UnsecureDAO unsecureDAO) {
+    public SettingsResource(CommonDAO commonDAO, UserRoleSettingsDAO userRoleSettingsDAO, UnsecureDAO unsecureDAO,
+                            AndroidEnterpriseConfigDAO enterpriseConfigDAO, AndroidEnterpriseService enterpriseService) {
         this.commonDAO = commonDAO;
         this.userRoleSettingsDAO = userRoleSettingsDAO;
         this.unsecureDAO = unsecureDAO;
+        this.enterpriseConfigDAO = enterpriseConfigDAO;
+        this.enterpriseService = enterpriseService;
     }
 
     // =================================================================================================================
@@ -221,6 +231,136 @@ public class SettingsResource {
             return Response.OK();
         } catch (Exception e) {
             log.error("Unexpected error when saving misc settings", e);
+            return Response.INTERNAL_ERROR();
+        }
+    }
+
+    // =================================================================================================================
+    // Android Management API Enterprise Configuration
+    // =================================================================================================================
+
+    @ApiOperation(
+            value = "Get enterprise configuration",
+            notes = "Gets the Android Management API enterprise configuration for the current customer"
+    )
+    @GET
+    @Path("/enterprise")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getEnterpriseConfig() {
+        if (!SecurityContext.get().hasPermission("settings")) {
+            log.error("Unauthorized attempt to get enterprise config by user " +
+                    SecurityContext.get().getCurrentUserName());
+            return Response.PERMISSION_DENIED();
+        }
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        try {
+            AndroidEnterpriseConfig config = enterpriseConfigDAO.findByCustomerId(customerId.get());
+            if (config == null) {
+                return Response.OK(null);
+            }
+            // Don't return encrypted SA JSON
+            config.setServiceAccountJsonEnc(null);
+            return Response.OK(config);
+        } catch (Exception e) {
+            log.error("Unexpected error when getting enterprise config", e);
+            return Response.INTERNAL_ERROR();
+        }
+    }
+
+    @ApiOperation(
+            value = "Save enterprise configuration",
+            notes = "Saves the Android Management API enterprise configuration for the current customer"
+    )
+    @POST
+    @Path("/enterprise")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response saveEnterpriseConfig(EnterpriseConfigRequest request) {
+        if (!SecurityContext.get().hasPermission("settings")) {
+            log.error("Unauthorized attempt to save enterprise config by user " +
+                    SecurityContext.get().getCurrentUserName());
+            return Response.PERMISSION_DENIED();
+        }
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        try {
+            // Validate Service Account JSON
+            if (request.getServiceAccountJson() == null || request.getServiceAccountJson().trim().isEmpty()) {
+                return Response.ERROR("error.enterprise.serviceaccount.required");
+            }
+            enterpriseService.validateServiceAccountJson(request.getServiceAccountJson());
+
+            AndroidEnterpriseConfig config = enterpriseConfigDAO.findByCustomerId(customerId.get());
+            boolean isNew = config == null;
+            if (isNew) {
+                config = new AndroidEnterpriseConfig();
+                config.setCustomerId(customerId.get());
+            }
+
+            config.setEnterpriseId(request.getEnterpriseId());
+            config.setProjectId(request.getProjectId());
+            config.setDpcPackageName(request.getDpcPackageName() != null ? request.getDpcPackageName() : "com.mdmesh.agent");
+            config.setEnabled(request.isEnabled());
+
+            // Encrypt Service Account JSON
+            String encrypted = com.hmdm.util.CryptoUtil.encryptAES(request.getServiceAccountJson(),
+                    "headwind-mdm-enterprise-aes-key-2024");
+            config.setServiceAccountJsonEnc(encrypted);
+
+            if (isNew) {
+                config.setCreatedAt(System.currentTimeMillis());
+                config.setUpdatedAt(System.currentTimeMillis());
+                enterpriseConfigDAO.insert(config);
+            } else {
+                config.setUpdatedAt(System.currentTimeMillis());
+                enterpriseConfigDAO.update(config);
+            }
+
+            // Don't return encrypted SA JSON
+            config.setServiceAccountJsonEnc(null);
+            return Response.OK(config);
+        } catch (RuntimeException e) {
+            if (e.getMessage() != null && e.getMessage().contains("Invalid Service Account")) {
+                return Response.ERROR("error.enterprise.serviceaccount.invalid");
+            }
+            log.error("Unexpected error when saving enterprise config", e);
+            return Response.INTERNAL_ERROR();
+        } catch (Exception e) {
+            log.error("Unexpected error when saving enterprise config", e);
+            return Response.INTERNAL_ERROR();
+        }
+    }
+
+    @ApiOperation(
+            value = "Delete enterprise configuration",
+            notes = "Deletes the Android Management API enterprise configuration for the current customer"
+    )
+    @DELETE
+    @Path("/enterprise")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response deleteEnterpriseConfig() {
+        if (!SecurityContext.get().hasPermission("settings")) {
+            log.error("Unauthorized attempt to delete enterprise config by user " +
+                    SecurityContext.get().getCurrentUserName());
+            return Response.PERMISSION_DENIED();
+        }
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        try {
+            enterpriseConfigDAO.deleteByCustomerId(customerId.get());
+            return Response.OK();
+        } catch (Exception e) {
+            log.error("Unexpected error when deleting enterprise config", e);
             return Response.INTERNAL_ERROR();
         }
     }

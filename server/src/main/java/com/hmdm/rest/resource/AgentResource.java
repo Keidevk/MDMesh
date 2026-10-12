@@ -25,6 +25,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdm.persistence.AgentCommandDAO;
 import com.hmdm.persistence.AgentEnrollmentTokenDAO;
+import com.hmdm.persistence.AndroidEnterpriseConfigDAO;
 import com.hmdm.persistence.UnsecureDAO;
 import com.hmdm.persistence.domain.AgentCommand;
 import com.hmdm.persistence.domain.AgentEnrollmentToken;
@@ -40,6 +41,8 @@ import com.hmdm.rest.json.agent.AgentCommandResult;
 import com.hmdm.rest.json.agent.AgentEnrollRequest;
 import com.hmdm.rest.json.agent.AgentEnrollResponse;
 import com.hmdm.rest.json.agent.AgentProtocol;
+import com.hmdm.rest.json.agent.EnterpriseEnrollRequest;
+import com.hmdm.service.AndroidEnterpriseService;
 import com.hmdm.util.AgentCapabilityTokens;
 import com.hmdm.util.CryptoUtil;
 import com.hmdm.util.DesiredConfigBuilder;
@@ -60,6 +63,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -93,6 +97,7 @@ public class AgentResource {
     private AgentCommandDAO commandDAO;
     private com.hmdm.rest.resource.support.ConfigAppInstaller configAppInstaller;
     private com.hmdm.rest.resource.support.ConfigReconciler configReconciler;
+    private AndroidEnterpriseService enterpriseService;
 
     /**
      * <p>A constructor required by Swagger.</p>
@@ -105,12 +110,14 @@ public class AgentResource {
                          AgentEnrollmentTokenDAO tokenDAO,
                          AgentCommandDAO commandDAO,
                          com.hmdm.rest.resource.support.ConfigAppInstaller configAppInstaller,
-                         com.hmdm.rest.resource.support.ConfigReconciler configReconciler) {
+                         com.hmdm.rest.resource.support.ConfigReconciler configReconciler,
+                         AndroidEnterpriseService enterpriseService) {
         this.unsecureDAO = unsecureDAO;
         this.tokenDAO = tokenDAO;
         this.commandDAO = commandDAO;
         this.configAppInstaller = configAppInstaller;
         this.configReconciler = configReconciler;
+        this.enterpriseService = enterpriseService;
     }
 
     // =================================================================================================================
@@ -506,6 +513,138 @@ public class AgentResource {
                     || (a.getAddress().length == 16 && (a.getAddress()[0] & 0xfe) == 0xfc);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    // =================================================================================================================
+    // Android Management API Enterprise Endpoints
+    // =================================================================================================================
+
+    @ApiOperation(value = "Enroll an agent via Android Management API", notes = "Validates an enterprise enrollment token and registers the device.")
+    @POST
+    @Path("/enterprise/enroll")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response enterpriseEnroll(EnterpriseEnrollRequest request) {
+        if (request == null || request.getEnrollmentToken() == null || request.getEnrollmentToken().trim().isEmpty()) {
+            return Response.ERROR("error.agent.token.invalid");
+        }
+
+        if (enterpriseService == null) {
+            return Response.ERROR("error.enterprise.not.configured");
+        }
+
+        // Validate enrollment token with Android Management API
+        com.google.api.services.androidmanagement.v1.model.EnrollmentToken token;
+        try {
+            // Extract enterprise ID from token (format: enterprises/{enterpriseId}/enrollmentTokens/{tokenId})
+            String[] parts = request.getEnrollmentToken().split("/");
+            if (parts.length < 4 || !"enterprises".equals(parts[0]) || !"enrollmentTokens".equals(parts[2])) {
+                return Response.ERROR("error.agent.token.invalid");
+            }
+            String enterpriseId = parts[0] + "/" + parts[1];
+            
+            // Find config by enterprise ID
+            com.hmdm.persistence.domain.AndroidEnterpriseConfig config = enterpriseService.getConfigByEnterpriseId(enterpriseId);
+            if (config == null || !config.isEnabled()) {
+                return Response.ERROR("error.enterprise.not.configured");
+            }
+            
+            token = enterpriseService.getEnrollmentToken(config.getCustomerId(), request.getEnrollmentToken());
+            if (token == null) {
+                return Response.ERROR("error.agent.token.invalid");
+            }
+        } catch (IllegalStateException e) {
+            return Response.ERROR(e.getMessage());
+        } catch (Exception e) {
+            logger.error("Failed to validate enterprise enrollment token", e);
+            return Response.ERROR("error.agent.token.invalid");
+        }
+
+        // Get device ID from request (provided by DPC after provisioning)
+        String enterpriseDeviceId = request.getDeviceId();
+        if (enterpriseDeviceId == null || enterpriseDeviceId.trim().isEmpty()) {
+            return Response.ERROR("error.enterprise.device.id.required");
+        }
+
+        // Get customer ID from config
+        com.hmdm.persistence.domain.AndroidEnterpriseConfig config = enterpriseService.getConfigByEnterpriseId(
+                request.getEnrollmentToken().split("/")[0] + "/" + request.getEnrollmentToken().split("/")[1]);
+        int customerId = config.getCustomerId();
+
+        // Determine configuration ID (from request or customer default)
+        Integer configurationId = null;
+        if (request.getCapabilities() != null) {
+            // Could extract from capabilities or use default
+        }
+        if (configurationId == null) {
+            com.hmdm.persistence.domain.Settings settings = unsecureDAO.getSettings(customerId);
+            if (settings != null) {
+                configurationId = settings.getNewDeviceConfigurationId();
+            }
+        }
+
+        // Create or update local device record
+        String deviceNumber = null;
+        Device device = null;
+        String deviceSecret = null;
+        try {
+            if (enterpriseDeviceId != null && !enterpriseDeviceId.trim().isEmpty()) {
+                // Check if device already exists
+                device = unsecureDAO.getDeviceByEnterpriseDeviceId(enterpriseDeviceId);
+            }
+            
+            if (device == null) {
+                // Create new device
+                deviceNumber = UUID.randomUUID().toString();
+                device = unsecureDAO.createNewDeviceForEnterprise(deviceNumber, customerId, configurationId, enterpriseDeviceId);
+                if (device == null) {
+                    return Response.ERROR("error.agent.enrollment.disabled");
+                }
+            } else {
+                deviceNumber = device.getNumber();
+            }
+
+            // Generate device secret for check-in auth (same as legacy flow)
+            deviceSecret = UUID.randomUUID().toString().replace("-", "")
+                    + UUID.randomUUID().toString().replace("-", "");
+            commandDAO.updateDeviceSecretHash(deviceNumber, CryptoUtil.getSHA256String(deviceSecret));
+            
+            // Update capabilities
+            if (request.getCapabilities() != null) {
+                commandDAO.updateDeviceCapabilities(deviceNumber, capabilitiesJson(request.getCapabilities()));
+            }
+            
+            // Update hardware ID
+            if (request.getHardwareId() != null && !request.getHardwareId().trim().isEmpty()) {
+                commandDAO.updateHardwareId(deviceNumber, request.getHardwareId().trim());
+            }
+            
+            // Update enterprise fields
+            device.setEnrollmentMode("enterprise");
+            device.setEnterpriseDeviceId(enterpriseDeviceId);
+            unsecureDAO.updateDeviceEnrollmentMode(deviceNumber, "enterprise", enterpriseDeviceId);
+            
+            commandDAO.touchLastUpdate(deviceNumber);
+
+            String configurationName = null;
+            if (device.getConfigurationId() != null) {
+                Configuration cfg = unsecureDAO.getConfigurationById(device.getConfigurationId());
+                if (cfg != null) {
+                    configurationName = cfg.getName();
+                }
+            }
+
+            // Queue config apps
+            int queuedApps = configAppInstaller.enqueueConfigApps(device);
+
+            logger.info("Enterprise agent enrolled device {} (enterprise device {}, configuration {}, {} config apps queued)",
+                    deviceNumber, enterpriseDeviceId, device.getConfigurationId(), queuedApps);
+            
+            return Response.OK(new AgentEnrollResponse(deviceNumber, configurationName, deviceSecret));
+        } catch (Exception e) {
+            logger.error("Enterprise enrollment failed for device {}", deviceNumber, e);
+            return Response.ERROR("error.agent.enrollment.failed");
         }
     }
 }

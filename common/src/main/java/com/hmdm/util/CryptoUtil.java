@@ -36,6 +36,15 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Random;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.spec.KeySpec;
+import java.util.Arrays;
+import java.util.Base64;
 
 public class CryptoUtil {
 
@@ -193,5 +202,92 @@ public class CryptoUtil {
         }
 
         return sb.toString();
+    }
+
+    // ==================== AES-GCM Encryption (for Service Account JSON) ====================
+
+    private static final String AES_ALGORITHM = "AES/GCM/NoPadding";
+    private static final String PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256";
+    private static final int PBKDF2_ITERATIONS = 100000;
+    private static final int KEY_LENGTH = 256;
+    private static final int GCM_IV_LENGTH = 12;
+    private static final int GCM_TAG_LENGTH = 16;
+
+    /**
+     * Derives an AES-256 key from a password using PBKDF2.
+     * The password should be a high-entropy secret (e.g., from config).
+     */
+    private static SecretKey deriveKey(String password, byte[] salt) {
+        try {
+            KeySpec spec = new PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, KEY_LENGTH);
+            SecretKeyFactory factory = SecretKeyFactory.getInstance(PBKDF2_ALGORITHM);
+            byte[] keyBytes = factory.generateSecret(spec).getEncoded();
+            return new SecretKeySpec(keyBytes, "AES");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to derive AES key", e);
+        }
+    }
+
+    /**
+     * Encrypts plaintext using AES-256-GCM with a password-derived key.
+     * Returns Base64(salt + iv + ciphertext + tag).
+     */
+    public static String encryptAES(String plaintext, String password) {
+        if (plaintext == null || plaintext.isEmpty()) {
+            return "";
+        }
+        try {
+            byte[] salt = new byte[16];
+            RANDOM.nextBytes(salt);
+            byte[] iv = new byte[GCM_IV_LENGTH];
+            RANDOM.nextBytes(iv);
+
+            SecretKey key = deriveKey(password, salt);
+
+            Cipher cipher = Cipher.getInstance(AES_ALGORITHM);
+            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv));
+
+            byte[] ciphertext = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+
+            // Combine: salt (16) + iv (12) + ciphertext + tag (16)
+            byte[] combined = new byte[salt.length + iv.length + ciphertext.length];
+            System.arraycopy(salt, 0, combined, 0, salt.length);
+            System.arraycopy(iv, 0, combined, salt.length, iv.length);
+            System.arraycopy(ciphertext, 0, combined, salt.length + iv.length, ciphertext.length);
+
+            return Base64.getEncoder().encodeToString(combined);
+        } catch (Exception e) {
+            throw new RuntimeException("AES encryption failed", e);
+        }
+    }
+
+    /**
+     * Decrypts ciphertext encrypted with encryptAES().
+     */
+    public static String decryptAES(String ciphertextB64, String password) {
+        if (ciphertextB64 == null || ciphertextB64.isEmpty()) {
+            return "";
+        }
+        try {
+            byte[] combined = Base64.getDecoder().decode(ciphertextB64);
+
+            if (combined.length < 16 + GCM_IV_LENGTH + GCM_TAG_LENGTH) {
+                throw new IllegalArgumentException("Ciphertext too short");
+            }
+
+            byte[] salt = Arrays.copyOfRange(combined, 0, 16);
+            byte[] iv = Arrays.copyOfRange(combined, 16, 16 + GCM_IV_LENGTH);
+            byte[] ciphertext = Arrays.copyOfRange(combined, 16 + GCM_IV_LENGTH, combined.length);
+
+            SecretKey key = deriveKey(password, salt);
+
+            Cipher cipher = Cipher.getInstance(AES_ALGORITHM);
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv));
+
+            byte[] plaintext = cipher.doFinal(ciphertext);
+            return new String(plaintext, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new RuntimeException("AES decryption failed", e);
+        }
     }
 }

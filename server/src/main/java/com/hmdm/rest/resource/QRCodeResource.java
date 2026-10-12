@@ -26,9 +26,11 @@ import javax.inject.Singleton;
 import javax.inject.Named;
 
 import com.hmdm.persistence.CustomerDAO;
+import com.hmdm.persistence.AndroidEnterpriseConfigDAO;
 import com.hmdm.persistence.domain.*;
 import com.hmdm.rest.json.Response;
 import com.hmdm.security.SecurityContext;
+import com.hmdm.service.AndroidEnterpriseService;
 import com.hmdm.util.StringUtil;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -60,6 +62,7 @@ import java.net.URLDecoder;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * <p>A resource used for returning the QR-code for the requested configuration.</p>
@@ -75,6 +78,7 @@ public class QRCodeResource {
 
     private UnsecureDAO unsecureDAO;
     private CustomerDAO customerDAO;
+    private AndroidEnterpriseService enterpriseService;
 
     private String filesDirectory;
     private String baseUrlForQrCode;
@@ -91,10 +95,12 @@ public class QRCodeResource {
     @Inject
     public QRCodeResource(UnsecureDAO unsecureDAO,
                           CustomerDAO customerDAO,
+                          AndroidEnterpriseService enterpriseService,
                           @Named("files.directory") String filesDirectory,
                           @Named("base.url") String baseUrl) throws MalformedURLException {
         this.unsecureDAO = unsecureDAO;
         this.customerDAO = customerDAO;
+        this.enterpriseService = enterpriseService;
         this.filesDirectory = filesDirectory;
         final URL url = new URL(baseUrl);
         final int port = url.getPort();
@@ -394,6 +400,76 @@ public class QRCodeResource {
                 miscExtras +
                 "}\n";
         return bundle;
+    }
+
+    // =================================================================================================================
+    // Android Management API Enterprise QR Code
+    // =================================================================================================================
+
+    @ApiOperation(
+            value = "Get Enterprise QR-code",
+            notes = "Gets the Android Management API QR code for enterprise enrollment.",
+            responseHeaders = {@ResponseHeader(name = "Content-Type")}
+    )
+    @ApiResponses({
+            @ApiResponse(code = 500, message = "Internal server error"),
+    })
+    @GET
+    @Path("/enterprise/{configId}")
+    @Produces(MediaType.APPLICATION_OCTET_STREAM)
+    public javax.ws.rs.core.Response generateEnterpriseQRCode(@PathParam("configId") @ApiParam("Configuration ID") Integer configId,
+                                                              @QueryParam("size") @ApiParam("A size of the QR-code image") Integer size,
+                                                              @QueryParam("format") @ApiParam("Output format: png or json") String format) {
+        logger.info("Generating Enterprise QR-code for configuration: {}", configId);
+        try {
+            if (enterpriseService == null) {
+                return javax.ws.rs.core.Response.status(503).entity("Enterprise service not available").build();
+            }
+
+            Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+            if (!customerId.isPresent()) {
+                return javax.ws.rs.core.Response.status(403).entity("Permission denied").build();
+            }
+
+            AndroidEnterpriseService.EnrollmentTokenResult result = enterpriseService.createEnrollmentToken(
+                    customerId.get(),
+                    configId,
+                    true,
+                    86400000L // 24 hours
+            );
+
+            String qrData = result.getQrCodeData();
+
+            if ("json".equalsIgnoreCase(format)) {
+                return javax.ws.rs.core.Response.ok(qrData)
+                        .header("Content-Type", "application/json")
+                        .build();
+            }
+
+            int imageSize = 250;
+            if (size != null) {
+                imageSize = size;
+            }
+            final int finalImageSize = imageSize;
+
+            return javax.ws.rs.core.Response.ok((StreamingOutput) output -> {
+                try {
+                    QRCode.from(qrData).withCharset("UTF-8").to(ImageType.PNG).withSize(finalImageSize, finalImageSize).writeTo(output);
+                    output.flush();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            })
+                    .header("Cache-Control", "no-cache")
+                    .header("Content-Type", "image/png")
+                    .build();
+
+        } catch (IllegalStateException e) {
+            return javax.ws.rs.core.Response.status(400).entity(e.getMessage()).build();
+        } catch (Exception e) {
+            logger.error("Unexpected error while generating Enterprise QR-code", e);
+            return javax.ws.rs.core.Response.serverError().build();
+        }
     }
 
 }

@@ -148,6 +148,17 @@ public interface DeviceMapper {
             " OR LENGTH(fastSearch) != #{fastSearchChars}"})
     void updateFastSearch(@Param("fastSearchChars") Integer fastSearchChars);
 
+    @Select({"SELECT * FROM devices WHERE enterprise_device_id = #{enterpriseDeviceId}"})
+    Device getDeviceByEnterpriseDeviceId(@Param("enterpriseDeviceId") String enterpriseDeviceId);
+
+    @Update({"UPDATE devices SET " +
+            "  enrollment_mode = #{enrollmentMode}, " +
+            "  enterprise_device_id = #{enterpriseDeviceId} " +
+            "WHERE number = #{deviceNumber}"})
+    void updateDeviceEnrollmentMode(@Param("deviceNumber") String deviceNumber,
+                                    @Param("enrollmentMode") String enrollmentMode,
+                                    @Param("enterpriseDeviceId") String enterpriseDeviceId);
+
     List<Group> getAllGroups(@Param("customerId") int customerId,
                              @Param("userId") Integer userId);
 

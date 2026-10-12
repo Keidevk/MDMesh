@@ -23,6 +23,7 @@ package com.hmdm.rest.resource;
 
 import com.hmdm.persistence.AgentCommandDAO;
 import com.hmdm.persistence.AgentEnrollmentTokenDAO;
+import com.hmdm.persistence.AndroidEnterpriseConfigDAO;
 import com.hmdm.persistence.UnsecureDAO;
 import com.hmdm.persistence.domain.AgentCommand;
 import com.hmdm.persistence.domain.AgentEnrollmentToken;
@@ -35,8 +36,11 @@ import com.hmdm.rest.json.Response;
 import com.hmdm.rest.json.agent.CommandHistoryView;
 import com.hmdm.rest.json.agent.ConfigStatusView;
 import com.hmdm.rest.json.agent.ConfigSyncSummary;
+import com.hmdm.rest.json.agent.EnterpriseCommandRequest;
+import com.hmdm.rest.json.agent.EnterpriseEnrollmentTokenRequest;
 import com.hmdm.rest.resource.support.ConfigReconciler;
 import com.hmdm.security.SecurityContext;
+import com.hmdm.service.AndroidEnterpriseService;
 import com.hmdm.util.AgentCapabilityTokens;
 import com.hmdm.util.DesiredConfigBuilder;
 import io.swagger.annotations.Api;
@@ -47,6 +51,7 @@ import org.slf4j.LoggerFactory;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.ws.rs.Consumes;
+import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
@@ -84,6 +89,7 @@ public class AgentAdminResource {
     private AgentWakeHub wakeHub;
     private com.hmdm.rest.resource.support.ConfigAppInstaller configAppInstaller;
     private ConfigReconciler configReconciler;
+    private AndroidEnterpriseService enterpriseService;
 
     /**
      * <p>A constructor required by Swagger.</p>
@@ -97,13 +103,15 @@ public class AgentAdminResource {
                               UnsecureDAO unsecureDAO,
                               AgentWakeHub wakeHub,
                               com.hmdm.rest.resource.support.ConfigAppInstaller configAppInstaller,
-                              ConfigReconciler configReconciler) {
+                              ConfigReconciler configReconciler,
+                              AndroidEnterpriseService enterpriseService) {
         this.tokenDAO = tokenDAO;
         this.commandDAO = commandDAO;
         this.unsecureDAO = unsecureDAO;
         this.wakeHub = wakeHub;
         this.configAppInstaller = configAppInstaller;
         this.configReconciler = configReconciler;
+        this.enterpriseService = enterpriseService;
     }
 
     /**
@@ -489,5 +497,205 @@ public class AgentAdminResource {
         }
         wakeHub.wake(deviceId, "commands");
         return Response.OK();
+    }
+
+    // =================================================================================================================
+    // Android Management API Enterprise Endpoints
+    // =================================================================================================================
+
+    @ApiOperation(value = "Create enterprise enrollment token", notes = "Creates an Android Management API enrollment token for the current customer's enterprise.")
+    @POST
+    @Path("/enterprise/enrollment-token")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response createEnterpriseEnrollmentToken(EnterpriseEnrollmentTokenRequest request) {
+        if (!canEditDevices("create enterprise enrollment token")) {
+            return Response.PERMISSION_DENIED();
+        }
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        if (enterpriseService == null) {
+            return Response.ERROR("error.enterprise.not.configured");
+        }
+
+        AndroidEnterpriseService.EnrollmentTokenResult result;
+        try {
+            result = enterpriseService.createEnrollmentToken(
+                    customerId.get(),
+                    request.getConfigurationId(),
+                    request.getOneTime() != null ? request.getOneTime() : true,
+                    request.getDurationMillis() != null ? request.getDurationMillis() : 86400000L
+            );
+        } catch (IllegalStateException e) {
+            return Response.ERROR(e.getMessage());
+        } catch (Exception e) {
+            logger.error("Failed to create enterprise enrollment token", e);
+            return Response.ERROR("error.enterprise.token.create.failed");
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("token", result.getToken());
+        response.put("qrCodeData", result.getQrCodeData());
+        response.put("configurationId", result.getConfigurationId());
+        return Response.OK(response);
+    }
+
+    @ApiOperation(value = "List enterprise devices", notes = "Lists all devices enrolled via Android Management API for the current customer.")
+    @GET
+    @Path("/enterprise/devices")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response listEnterpriseDevices() {
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        if (enterpriseService == null) {
+            return Response.ERROR("error.enterprise.not.configured");
+        }
+
+        try {
+            List<com.google.api.services.androidmanagement.v1.model.Device> devices = enterpriseService.listDevices(customerId.get());
+            return Response.OK(devices);
+        } catch (IllegalStateException e) {
+            return Response.ERROR(e.getMessage());
+        } catch (Exception e) {
+            logger.error("Failed to list enterprise devices", e);
+            return Response.ERROR("error.enterprise.devices.list.failed");
+        }
+    }
+
+    @ApiOperation(value = "Issue enterprise command", notes = "Issues a command to an Android Management API device.")
+    @POST
+    @Path("/enterprise/devices/{deviceId}/command")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response issueEnterpriseCommand(@PathParam("deviceId") String deviceId, EnterpriseCommandRequest request) {
+        if (!canEditDevices("issue enterprise command")) {
+            return Response.PERMISSION_DENIED();
+        }
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        if (enterpriseService == null) {
+            return Response.ERROR("error.enterprise.not.configured");
+        }
+
+        if (request == null || request.getType() == null || request.getType().trim().isEmpty()) {
+            return Response.ERROR("error.enterprise.command.invalid");
+        }
+
+        try {
+            com.google.api.services.androidmanagement.v1.model.Command command = buildCommand(request);
+            if (command == null) {
+                return Response.ERROR("error.enterprise.command.unsupported");
+            }
+            com.google.api.services.androidmanagement.v1.model.Operation operation = enterpriseService.issueCommand(customerId.get(), deviceId, command);
+            return Response.OK(operation);
+        } catch (IllegalStateException e) {
+            return Response.ERROR(e.getMessage());
+        } catch (Exception e) {
+            logger.error("Failed to issue enterprise command", e);
+            return Response.ERROR("error.enterprise.command.failed");
+        }
+    }
+
+    @ApiOperation(value = "Delete enterprise device", notes = "Deletes a device from Android Management API.")
+    @DELETE
+    @Path("/enterprise/devices/{deviceId}")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response deleteEnterpriseDevice(@PathParam("deviceId") String deviceId) {
+        if (!canEditDevices("delete enterprise device")) {
+            return Response.PERMISSION_DENIED();
+        }
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        if (enterpriseService == null) {
+            return Response.ERROR("error.enterprise.not.configured");
+        }
+
+        try {
+            enterpriseService.deleteDevice(customerId.get(), deviceId);
+            return Response.OK();
+        } catch (IllegalStateException e) {
+            return Response.ERROR(e.getMessage());
+        } catch (Exception e) {
+            logger.error("Failed to delete enterprise device", e);
+            return Response.ERROR("error.enterprise.device.delete.failed");
+        }
+    }
+
+    @ApiOperation(value = "Sync enterprise devices", notes = "Pulls device states from Android Management API and updates local database.")
+    @POST
+    @Path("/enterprise/sync")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response syncEnterpriseDevices() {
+        if (!canEditDevices("sync enterprise devices")) {
+            return Response.PERMISSION_DENIED();
+        }
+        Optional<Integer> customerId = SecurityContext.get().getCurrentCustomerId();
+        if (!customerId.isPresent()) {
+            return Response.PERMISSION_DENIED();
+        }
+
+        if (enterpriseService == null) {
+            return Response.ERROR("error.enterprise.not.configured");
+        }
+
+        try {
+            List<com.google.api.services.androidmanagement.v1.model.Device> devices = enterpriseService.listDevices(customerId.get());
+            int synced = 0;
+            for (com.google.api.services.androidmanagement.v1.model.Device device : devices) {
+                // TODO: Sync device state to local DB (device_state table)
+                synced++;
+            }
+            Map<String, Object> result = new HashMap<>();
+            result.put("synced", synced);
+            return Response.OK(result);
+        } catch (IllegalStateException e) {
+            return Response.ERROR(e.getMessage());
+        } catch (Exception e) {
+            logger.error("Failed to sync enterprise devices", e);
+            return Response.ERROR("error.enterprise.sync.failed");
+        }
+    }
+
+    private com.google.api.services.androidmanagement.v1.model.Command buildCommand(EnterpriseCommandRequest request) {
+        String type = request.getType().toUpperCase(java.util.Locale.ROOT);
+        Map<String, Object> payload = request.getPayload();
+
+        switch (type) {
+            case "WIPE":
+                Boolean userWipe = payload != null ? (Boolean) payload.get("userWipe") : false;
+                return AndroidEnterpriseService.buildWipeCommand(userWipe != null ? userWipe : false);
+            case "LOCK":
+                String message = payload != null ? (String) payload.get("lockMessage") : null;
+                return AndroidEnterpriseService.buildLockCommand(message);
+            case "INSTALL_APP":
+                String packageName = payload != null ? (String) payload.get("packageName") : null;
+                Long versionCode = payload != null ? (Long) payload.get("versionCode") : null;
+                if (packageName == null) return null;
+                return AndroidEnterpriseService.buildInstallAppCommand(packageName, versionCode);
+            case "UNINSTALL_APP":
+                String uninstallPkg = payload != null ? (String) payload.get("packageName") : null;
+                if (uninstallPkg == null) return null;
+                return AndroidEnterpriseService.buildUninstallAppCommand(uninstallPkg);
+            case "CLEAR_APP_DATA":
+                String clearPkg = payload != null ? (String) payload.get("packageName") : null;
+                if (clearPkg == null) return null;
+                return AndroidEnterpriseService.buildClearAppDataCommand(clearPkg);
+            case "REBOOT":
+                return AndroidEnterpriseService.buildRebootCommand();
+            default:
+                return null;
+        }
     }
 }

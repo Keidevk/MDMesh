@@ -2860,4 +2860,40 @@
         <rollback>ALTER TABLE configurations DROP COLUMN disableFactoryReset;</rollback>
     </changeSet>
 
+    <changeSet id="26.10.01-android-enterprise-config" author="opencode" context="common">
+        <comment>Table,new: android_enterprise_config — stores Android Management API enterprise configuration per customer</comment>
+        <sql>
+            CREATE TABLE android_enterprise_config (
+                id SERIAL PRIMARY KEY,
+                customer_id INT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+                enterprise_id VARCHAR(255) NOT NULL,
+                service_account_json_enc TEXT NOT NULL,
+                project_id VARCHAR(255),
+                dpc_package_name VARCHAR(255) DEFAULT 'com.mdmesh.agent',
+                enabled BOOLEAN NOT NULL DEFAULT true,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL,
+                UNIQUE(customer_id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE android_enterprise_config;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="26.10.01-devices-enrollment-mode" author="opencode" context="common">
+        <comment>Column,new: devices#enrollment_mode — 'token' (legacy) or 'enterprise' (Android Management API).
+             Column,new: devices#enterprise_device_id — full resource name from AM API (enterprises/.../devices/...).</comment>
+        <sql>
+            ALTER TABLE devices ADD COLUMN enrollment_mode VARCHAR(20) NOT NULL DEFAULT 'token';
+            ALTER TABLE devices ADD COLUMN enterprise_device_id VARCHAR(255);
+            ALTER TABLE devices ADD CONSTRAINT chk_enrollment_mode CHECK (enrollment_mode IN ('token','enterprise'));
+        </sql>
+        <rollback>
+            ALTER TABLE devices DROP CONSTRAINT chk_enrollment_mode;
+            ALTER TABLE devices DROP COLUMN enterprise_device_id;
+            ALTER TABLE devices DROP COLUMN enrollment_mode;
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

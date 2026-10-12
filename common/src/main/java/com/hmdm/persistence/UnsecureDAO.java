@@ -716,6 +716,49 @@ public class UnsecureDAO {
         deviceMapper.updateFastSearch(fastSearchChars);
     }
 
+    public Device getDeviceByEnterpriseDeviceId(String enterpriseDeviceId) {
+        return deviceMapper.getDeviceByEnterpriseDeviceId(enterpriseDeviceId);
+    }
+
+    public Device createNewDeviceForEnterprise(String deviceId, int customerId, Integer configurationId, String enterpriseDeviceId) {
+        if (configurationId == null) {
+            Settings settings = getSettings(customerId);
+            if (settings == null || !settings.isCreateNewDevices()) {
+                logger.warn("Creating new devices disabled by settings (customer {})", customerId);
+                return null;
+            }
+            configurationId = settings.getNewDeviceConfigurationId();
+            if (configurationId == null) {
+                logger.warn("No default configuration for new devices (customer {})", customerId);
+                return null;
+            }
+        }
+
+        Device newDevice = new Device();
+        newDevice.setCustomerId(customerId);
+        newDevice.setConfigurationId(configurationId);
+        Settings settings = getSettings(customerId);
+        Integer groupId = settings == null ? null : settings.getNewDeviceGroupId();
+        if (groupId != null) {
+            List<LookupItem> groups = new LinkedList<>();
+            groups.add(new LookupItem(groupId, ""));
+            newDevice.setGroups(groups);
+        }
+        newDevice.setNumber(deviceId);
+        newDevice.setLastUpdate(0L);
+        newDevice.setEnrollmentMode("enterprise");
+        newDevice.setEnterpriseDeviceId(enterpriseDeviceId);
+        insertDevice(newDevice);
+        logger.info("New enterprise device {} added (customer {}, configuration {}, enterprise device {})",
+                deviceId, customerId, configurationId, enterpriseDeviceId);
+
+        return getDeviceByNumber(deviceId);
+    }
+
+    public void updateDeviceEnrollmentMode(String deviceNumber, String enrollmentMode, String enterpriseDeviceId) {
+        deviceMapper.updateDeviceEnrollmentMode(deviceNumber, enrollmentMode, enterpriseDeviceId);
+    }
+
     public UserRole findRoleByNameUnsecure(String name) {
         return userMapper.findUserRoleByName(name);
     }

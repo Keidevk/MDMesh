@@ -25,6 +25,7 @@ import com.google.inject.Scopes;
 import com.google.inject.servlet.ServletModule;
 import com.hmdm.rest.filter.PrivateIPFilter;
 import com.hmdm.rest.resource.*;
+import com.hmdm.service.AndroidEnterpriseService;
 import com.hmdm.rest.filter.AuthFilter;
 import com.hmdm.security.jwt.JWTFilter;
 
@@ -50,6 +51,7 @@ public class PrivateRestModule extends ServletModule {
         this.bind(UserRoleResource.class);
         this.bind(AgentAdminResource.class);
         this.bind(FDroidResource.class);
+        this.bind(AndroidEnterpriseService.class);
         // Eager so AgentWakeHub.INSTANCE is set at boot, before any device WebSocket connects.
         this.bind(com.hmdm.notification.AgentWakeHub.class).asEagerSingleton();
     }

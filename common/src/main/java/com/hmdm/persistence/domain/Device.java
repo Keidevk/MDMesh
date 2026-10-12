@@ -106,6 +106,12 @@ public class Device implements CustomerData, Serializable {
     @ApiModelProperty("Stable per-device hardware id (enrollment-specific id / ANDROID_ID)")
     private String hardwareId;
 
+    @ApiModelProperty("Enrollment mode: 'token' (legacy) or 'enterprise' (Android Management API)")
+    private String enrollmentMode;
+
+    @ApiModelProperty("Enterprise device ID from Android Management API (enterprises/.../devices/...)")
+    private String enterpriseDeviceId;
+
     public Device() {
     }
 
@@ -115,6 +121,22 @@ public class Device implements CustomerData, Serializable {
 
     public void setHardwareId(String hardwareId) {
         this.hardwareId = hardwareId;
+    }
+
+    public String getEnrollmentMode() {
+        return enrollmentMode;
+    }
+
+    public void setEnrollmentMode(String enrollmentMode) {
+        this.enrollmentMode = enrollmentMode;
+    }
+
+    public String getEnterpriseDeviceId() {
+        return enterpriseDeviceId;
+    }
+
+    public void setEnterpriseDeviceId(String enterpriseDeviceId) {
+        this.enterpriseDeviceId = enterpriseDeviceId;
     }
 
     public Integer getId() {
