@@ -91,7 +91,7 @@ export const CONFIG_FIELDS: FieldDef[] = [
   ] },
   { key: 'encryptDevice', label: 'Require encryption', type: 'switch', group: 'Security', help: 'Require full-device encryption.' },
   { key: 'permissive', label: 'Permissive mode', type: 'tri', group: 'Security', help: 'Relax policy enforcement (permissive mode).' },
-  { key: 'lockSafeSettings', label: 'Lock safe-mode settings', type: 'tri', group: 'Security', help: 'Block access to settings that could bypass the MDM.' },
+  { key: 'lockSafeSettings', label: 'Lock safe settings (legacy)', type: 'tri', group: 'Security', help: 'Old Headwind launcher setting; the MDMesh agent ignores it. To block Safe Mode, use Disable Safe Mode.' },
   { key: 'disableLocation', label: 'Block location permission', type: 'tri', group: 'Security', help: 'Prevent apps from being granted location permission.' },
   { key: 'passwordMode', label: 'Password policy', type: 'text', group: 'Security', help: 'Device passcode policy (advanced; JSON string).' },
 
@@ -100,6 +100,7 @@ export const CONFIG_FIELDS: FieldDef[] = [
   { key: 'blockStatusBar', label: 'Lock status bar', type: 'switch', group: 'Restrictions', help: 'Prevent pulling down the system status bar.' },
   { key: 'disableScreenshots', label: 'Block screenshots', type: 'tri', group: 'Restrictions', enforced: true, help: 'Prevent screenshots and screen recording.' },
   { key: 'disableFactoryReset', label: 'Block factory reset', type: 'tri', group: 'Restrictions', focused: true, enforced: true, help: 'Prevent a factory reset from Settings; Auto leaves an existing block on the device, Off releases it.' },
+  { key: 'disableSafeBoot', label: 'Disable Safe Mode', type: 'tri', group: 'Restrictions', focused: true, enforced: true, help: 'Prevent rebooting into Safe Mode, which would bypass the kiosk; Auto leaves an existing block on the device, Off releases it.' },
   { key: 'lockVolume', label: 'Lock volume', type: 'tri', group: 'Restrictions', help: 'Disable the volume buttons.' },
   { key: 'allowedClasses', label: 'Allowed app classes', type: 'text', group: 'Restrictions', help: 'Comma-separated list of permitted app component classes.' },
   { key: 'restrictions', label: 'Android restrictions', type: 'textarea', group: 'Restrictions', help: 'Comma-separated Android user restrictions to apply in MDM mode.' },

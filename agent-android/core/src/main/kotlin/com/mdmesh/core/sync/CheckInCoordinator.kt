@@ -2,6 +2,7 @@ package com.mdmesh.core.sync
 
 import com.mdmesh.core.capability.CapabilitySource
 import com.mdmesh.core.command.CommandDispatcher
+import com.mdmesh.core.install.InstallIntegrityPolicy
 import com.mdmesh.core.net.MdmApi
 import com.mdmesh.core.state.DeviceStateSource
 import com.mdmesh.core.store.DeviceIdentity
@@ -19,7 +20,8 @@ import javax.inject.Singleton
  * One full check-in cycle — the source of truth of the sync loop:
  *
  *  1. ensure the device is enrolled (server-issued id);
- *  2. drain pending command acks and POST them together with the fresh capabilities;
+ *  2. drain the next batch of pending command acks and POST it with the fresh capabilities (results beyond one
+ *     batch, or that the server did not take, wait for the next check-in);
  *  3. dispatch each returned (capability-gated) command;
  *  4. buffer the new results for delivery on the next cycle.
  *
@@ -42,6 +44,7 @@ class CheckInCoordinator @Inject constructor(
     private val stateSource: DeviceStateSource,
     private val telemetrySource: TelemetrySource,
     private val eventSink: EventSink,
+    private val installIntegrity: InstallIntegrityPolicy,
     private val hardwareIdSource: HardwareIdSource = HardwareIdSource { null },
     private val syncStatus: SyncStatus = SyncStatus(),
 ) {
@@ -90,7 +93,9 @@ class CheckInCoordinator @Inject constructor(
             eventSink.restore(bufferedEvents)
             throw CheckInException(response.message ?: "check-in rejected")
         }
-        pending.delivered()
+        pending.delivered(data.resultsAccepted)
+        // Before this batch runs: its installs are judged by what this server guarantees.
+        installIntegrity.update(data.installIntegrity)
 
         for (command in data.commands) {
             val result = dispatcher.dispatch(command)

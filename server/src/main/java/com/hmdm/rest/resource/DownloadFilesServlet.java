@@ -40,6 +40,7 @@ import com.hmdm.persistence.ApplicationDAO;
 import com.hmdm.rest.filter.PublicIPFilter;
 import com.hmdm.rest.json.Response;
 import com.hmdm.util.CryptoUtil;
+import com.hmdm.util.HostedFiles;
 import org.apache.poi.util.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,7 +48,6 @@ import org.slf4j.LoggerFactory;
 @Singleton
 public class DownloadFilesServlet extends HttpServlet {
     private final ApplicationDAO applicationDAO;
-    private final String filesDirectory;
     private final File baseDirectory;
     private final PublicIPFilter publicIPFilter;
 
@@ -66,7 +66,6 @@ public class DownloadFilesServlet extends HttpServlet {
                                 @Named("secure.enrollment") boolean secureEnrollment,
                                 @Named("hash.secret") String hashSecret) {
         this.applicationDAO = applicationDAO;
-        this.filesDirectory = filesDirectory;
         this.baseDirectory = new File(filesDirectory);
         this.publicIPFilter = publicIPFilter;
         this.secureEnrollment = secureEnrollment;
@@ -106,8 +105,8 @@ public class DownloadFilesServlet extends HttpServlet {
             }
         }
 
-        File file = new File(String.format("%s/%s", this.filesDirectory, path));
-        if (file.exists()) {
+        File file = resolveRequestedFile(this.baseDirectory, req.getRequestURI());
+        if (file != null) {
 
             long modifiedSince = req.getDateHeader("If-Modified-Since");
             if (modifiedSince != -1 && modifiedSince > file.lastModified()) {
@@ -142,10 +141,32 @@ public class DownloadFilesServlet extends HttpServlet {
                 e.printStackTrace();
             }
         } else {
-            System.out.println("Not found: " + file.getAbsolutePath());
+            log.debug("Not found: {}", path);
             resp.sendError(404);
         }
 
+    }
+
+    /**
+     * <p>Maps a {@code /files/...} request URI to the file it names: decoded exactly once, and only when the
+     * result is an existing regular file whose real path (symlinks resolved) lies inside {@code baseDirectory}.</p>
+     *
+     * @return the file to serve, or null when there is nothing servable at that path.
+     */
+    static File resolveRequestedFile(File baseDirectory, String requestUri) {
+        if (requestUri == null) {
+            return null;
+        }
+        int index = requestUri.indexOf("/files/");
+        if (index < 0) {
+            return null;
+        }
+        try {
+            return HostedFiles.containedFile(baseDirectory,
+                    URLDecoder.decode(requestUri.substring(index + "/files/".length()), "UTF8"));
+        } catch (IllegalArgumentException | IOException e) {
+            return null;
+        }
     }
 
     private void sendPartialContent(String rangeStr, File file, HttpServletResponse resp) {

@@ -29,6 +29,8 @@ REPO="$PWD"   # repo root — used for absolute paths inside subshells (e.g. exp
 # database), or the mdmesh role (anything reading the mdmesh database), isolated from root's environment and terminal.
 # shellcheck source=lib/runas.sh
 . "$REPO/install/lib/runas.sh"
+# shellcheck source=lib/release.sh
+. "$REPO/install/lib/release.sh"
 
 [ "$(id -u)" = "0" ] || { echo "Run as root (sudo)."; exit 1; }
 command -v apt-get >/dev/null || { echo "This script targets Debian/Ubuntu."; exit 1; }
@@ -151,6 +153,11 @@ for _v in SMTP_SSL SMTP_STARTTLS; do
   case "${!_v,,}" in true|1) printf -v "$_v" true ;; false|0) printf -v "$_v" false ;;
     *) echo "  $_v must be true or false."; exit 1 ;; esac
 done
+# LEGACY_DEVICE_API: same values, written to ROOT.xml as 1/0.
+if [ -n "${LEGACY_DEVICE_API+x}" ]; then
+  case "${LEGACY_DEVICE_API,,}" in true|1) LEGACY_DEVICE_API=1 ;; false|0) LEGACY_DEVICE_API=0 ;;
+    *) echo "  LEGACY_DEVICE_API must be 1 or 0."; exit 1 ;; esac
+fi
 # The HTTP port (HTTP_PORT) is settled below, once the existing install's server.xml can be read the safe way.
 DB_PASSWORD=$(rand); HASH_SECRET=$(rand); ADMIN_PASSWORD=$(rand); RESET_TOKEN=$(openssl rand -hex 16)
 JWT_SECRET=$(openssl rand -hex 64)   # jwt.secretkey: hex only (see the reuse rule below)
@@ -653,8 +660,9 @@ if [ "$DB_STATE" = seeded ]; then
 fi
 
 step "Building the server"
+# clean: an upgrade builds in the previous checkout, and classes a release deletes must not stay in target/.
 run "Maven package (JDK 17, ~1-2 min)" bash -c \
-  'cp server/build.properties.example server/build.properties 2>/dev/null || true; mvn -q -B -DskipTests -pl server -am package'
+  'cp server/build.properties.example server/build.properties 2>/dev/null || true; mvn -q -B -DskipTests -pl server -am clean package'
 
 step "Fetching the agent APK from GitHub Releases"
 # The agent APK is a release artifact, not a repo file. Pull the latest release's signed APK (+ manifest)
@@ -674,70 +682,21 @@ AGENT_FETCH_DIR=""
 agent_fetch_cleanup() { if [ -n "$AGENT_FETCH_DIR" ]; then rm -rf -- "$AGENT_FETCH_DIR"; AGENT_FETCH_DIR=""; fi; }
 trap agent_fetch_cleanup EXIT
 if [ -n "$GITHUB_REPO" ]; then
-  # gh_curl ARGS...: curl, sending GITHUB_TOKEN (when set) as an Authorization header read from stdin (-H @-, curl 7.55+),
-  # never on curl's command line, which every local user can read (ps, /proc/<pid>/cmdline).
-  gh_curl() {
-    if [ -n "${GITHUB_TOKEN:-}" ]; then printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl -H @- "$@"
-    else curl "$@"; fi
-  }
-  # jget NAME: the download URL of release asset NAME in the release JSON on stdin; empty (and success) when there is
-  # none or the reply is not JSON (no release yet, an empty body, a rate-limit page): under set -euo pipefail a failing
-  # jget would end the install at the assignment instead of taking the "no published release" branch.
-  jget() { python3 -c 'import sys,json;
-d=json.load(sys.stdin)
-def asset(n): return next((a["browser_download_url"] for a in d.get("assets",[]) if a["name"]==n),"")
-print({"apk":asset("mdmesh-agent.apk"),"manifest":asset("manifest.json"),
-       "signature":asset("manifest.json.minisig"),"tag":str(d.get("tag_name") or "")}.get(sys.argv[1],""))' "$1" 2>/dev/null || true; }
-  # manifest_apk FIELD FILE: components.apk.FIELD of the manifest FILE; empty when it has none.
-  manifest_apk() { python3 -c 'import sys,json;print(json.load(open(sys.argv[2]))["components"]["apk"][sys.argv[1]])' "$1" "$2" 2>/dev/null || true; }
-  # manifest_version FILE: the manifest's top-level "version" (release/build-manifest.sh: the tag without its "v").
-  manifest_version() { python3 -c 'import sys,json;v=json.load(open(sys.argv[1])).get("version");print(v if isinstance(v,str) else "")' "$1" 2>/dev/null || true; }
-  # fetch_agent_apk: sets AGENT_APK (and AGENT_CK) when the latest release's APK verifies as described above; otherwise
-  # says why in one line and leaves AGENT_APK empty. Always returns 0, so set -e still stops the run on anything else.
+  # fetch_agent_apk: sets AGENT_APK (and AGENT_CK) when the latest release's APK verifies (install/lib/release.sh);
+  # otherwise says why in one line and leaves AGENT_APK empty. Always returns 0, so set -e still stops the run on
+  # anything else.
   fetch_agent_apk() {
-    local rel apk_url man_url sig_url tag mver d want_sha soft=" — console uses debug defaults; host /files/agent.apk manually"
+    local soft=" — console uses debug defaults; host /files/agent.apk manually"
     AGENT_CK=""
-    rel=$(gh_curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>>"$LOGFILE" || true)
-    apk_url=$(printf '%s' "$rel" | jget apk); man_url=$(printf '%s' "$rel" | jget manifest)
-    sig_url=$(printf '%s' "$rel" | jget signature)
-    if [ -z "$apk_url" ] || [ -z "$man_url" ]; then info "No published release found for ${GITHUB_REPO}${soft}"; return; fi
-    if [ -z "$sig_url" ]; then
-      info "The latest release of ${GITHUB_REPO} has no manifest signature (manifest.json.minisig), so its APK is not trusted${soft}"; return
-    fi
-    if ! command -v minisign >/dev/null 2>&1; then
-      info "minisign is unavailable, so the release manifest cannot be verified and its APK is not trusted${soft}"; return
-    fi
-    if [ ! -r "$REPO/release/minisign.pub" ]; then
-      info "The release signing key release/minisign.pub is missing from this checkout, so the manifest cannot be verified${soft}"; return
-    fi
     # The ERR trap does not fire inside a function (no set -E), so a failure here must be caught here, or the install
     # would end without a word.
     AGENT_FETCH_DIR=$(mktemp -d) || { AGENT_FETCH_DIR=""; info "Could not create a temporary directory for the release files${soft}"; return 0; }
-    d=$AGENT_FETCH_DIR
-    if ! gh_curl -fsSL "$man_url" -o "$d/manifest.json" 2>>"$LOGFILE" \
-       || ! gh_curl -fsSL "$sig_url" -o "$d/manifest.json.minisig" 2>>"$LOGFILE"; then
-      info "Could not download the release manifest or its signature (details in $LOGFILE)${soft}"; return
+    if mdm_fetch_release_apk "$GITHUB_REPO" "$REPO/release/minisign.pub" "$AGENT_FETCH_DIR" "$LOGFILE"; then
+      AGENT_CK=$MDM_AGENT_CK; AGENT_APK="$AGENT_FETCH_DIR/agent.apk"
+    else
+      info "${MDM_RELEASE_PROBLEM}${soft}"
     fi
-    if ! minisign -V -p "$REPO/release/minisign.pub" -m "$d/manifest.json" >> "$LOGFILE" 2>&1; then
-      info "The release manifest's signature is invalid (it does not verify with release/minisign.pub), so its APK is not trusted${soft}"; return
-    fi
-    # Bind the signed manifest to this release: an older release's manifest is signed too, and served in its place (a
-    # replay) it would verify. Its version must be the release tag without the "v".
-    tag=$(printf '%s' "$rel" | jget tag); mver=$(manifest_version "$d/manifest.json")
-    if [ -z "$mver" ] || [ "$mver" != "${tag#v}" ]; then
-      info "The signed manifest is for version ${mver:-(none)}, not for the latest release ${tag:-(untagged)}, so its APK is not trusted${soft}"; return
-    fi
-    AGENT_CK=$(manifest_apk signatureChecksum "$d/manifest.json"); want_sha=$(manifest_apk sha256 "$d/manifest.json")
-    if [ -z "$AGENT_CK" ] || [ -z "$want_sha" ]; then
-      AGENT_CK=""; info "The signed release manifest names no agent APK checksum or sha256${soft}"; return
-    fi
-    if ! gh_curl -fsSL "$apk_url" -o "$d/agent.apk" 2>>"$LOGFILE"; then
-      AGENT_CK=""; info "Could not download the release APK (details in $LOGFILE)${soft}"; return
-    fi
-    if [ "$(sha256sum "$d/agent.apk" | awk '{print $1}')" != "$want_sha" ]; then
-      AGENT_CK=""; info "The downloaded APK does not match the sha256 in the signed manifest, so it is not trusted${soft}"; return
-    fi
-    AGENT_APK="$d/agent.apk"
+    return 0
   }
   fetch_agent_apk
   if [ -n "$AGENT_APK" ]; then
@@ -836,6 +795,8 @@ done < <(find "$REPO/install/emails" -type f -print0)
 # Host the release agent APK the QR points at (/files/agent.apk), if we fetched one above.
 [ -n "$AGENT_APK" ] && { base_write files/agent.apk cat "$AGENT_APK"; ok "agent APK hosted at /files/agent.apk"; }
 agent_fetch_cleanup   # the fetched release files are no longer needed (the EXIT trap covers every other path)
+# Headwind launcher device routes: off unless 1, kept across re-runs like the settings below.
+X_LEGACY_DEVICE_API=$(root_param LEGACY_DEVICE_API legacy.device.api 0)
 # SMTP (password-recovery email): the Docker .env's variables. Read here, after the deferred ROOT.xml read above.
 X_SMTP_HOST=$(root_param SMTP_HOST smtp.host "")
 X_SMTP_PORT=$(root_param SMTP_PORT smtp.port 25)
@@ -860,6 +821,7 @@ tc_write conf/Catalina/localhost/ROOT.xml cat <<XML
     <Parameter name="base.url"        value="${BASE_URL}"/>
     <Parameter name="usage.scenario"    value="private"/>
     <Parameter name="secure.enrollment" value="0"/>
+    <Parameter name="legacy.device.api" value="${X_LEGACY_DEVICE_API}"/>
     <Parameter name="hash.secret"       value="${HASH_SECRET}"/>
     <Parameter name="jwt.secretkey"     value="${JWT_SECRET}"/>
     <Parameter name="plugins.files.directory" value="${BASE_DIR}/plugins"/>

@@ -3,6 +3,7 @@ package com.mdmesh.core.sync
 import com.mdmesh.core.command.CommandDispatcher
 import com.mdmesh.core.command.CommandHandler
 import com.mdmesh.core.command.CommandResults
+import com.mdmesh.core.install.InstallIntegrityPolicy
 import com.mdmesh.proto.AgentCheckInResponse
 import com.mdmesh.proto.CommandEnvelope
 import com.mdmesh.proto.CommandResult
@@ -14,6 +15,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -46,6 +48,7 @@ class CheckInCoordinatorTest {
         pending: PendingResults,
         identityId: String = "dev-1",
         syncStatus: SyncStatus = SyncStatus(),
+        installIntegrity: InstallIntegrityPolicy = InstallIntegrityPolicy(),
     ): CheckInCoordinator {
         val identity = FakeIdentity(initialId = identityId, initialSecret = "sek-1")
         val eventSink = object : com.mdmesh.core.telemetry.EventSink {
@@ -65,6 +68,7 @@ class CheckInCoordinatorTest {
             telemetrySource = { null },
             eventSink = eventSink,
             syncStatus = syncStatus,
+            installIntegrity = installIntegrity,
         )
     }
 
@@ -92,6 +96,25 @@ class CheckInCoordinatorTest {
         assertEquals(1, buffered.size)
         assertEquals("c1", buffered.first().commandId)
         assertEquals(CommandStatus.DONE, buffered.first().status)
+    }
+
+    @Test
+    fun `follows the server's installIntegrity on every check-in`() = runTest {
+        val policy = InstallIntegrityPolicy()
+        val api = FakeMdmApi().apply {
+            checkInResponse = ResponseEnvelope(
+                status = "OK",
+                data = AgentCheckInResponse(installIntegrity = AgentCheckInResponse.INSTALL_INTEGRITY_REQUIRED),
+            )
+        }
+        val coordinator = coordinator(api, PendingResults(), installIntegrity = policy)
+        coordinator.runOnce()
+        assertTrue(policy.required)
+
+        // A server that doesn't send it (an older one, e.g. after a rollback) gets the old behaviour back.
+        api.checkInResponse = ResponseEnvelope(status = "OK", data = AgentCheckInResponse())
+        coordinator.runOnce()
+        assertFalse(policy.required)
     }
 
     @Test
@@ -187,5 +210,37 @@ class CheckInCoordinatorTest {
         // c2 is still running (a self-update replaces the process here): c1's result must already be saved.
         assertEquals(listOf("c1"), PendingResults(backup).drain().map { it.commandId })
         cycle.cancel()
+    }
+
+    private fun ack(id: String) = CommandResult(commandId = id, status = CommandStatus.DONE, completedAt = "t")
+
+    @Test
+    fun `a backlog beyond one batch waits for the next check-in`() = runTest {
+        val api = FakeMdmApi()
+        val total = PendingResults.MAX_BATCH_RESULTS + 5
+        val pending = PendingResults().apply { add((1..total).map { ack("c$it") }) }
+
+        val coordinator = coordinator(api, pending)
+        coordinator.runOnce()
+        assertEquals(listOf(PendingResults.MAX_BATCH_RESULTS), api.checkInRequests.map { it.results.size })
+
+        coordinator.runOnce()
+        assertEquals(5, api.checkInRequests.last().results.size)
+    }
+
+    @Test
+    fun `results the server did not accept are resent on the next check-in`() = runTest {
+        val api = FakeMdmApi().apply {
+            checkInResponse = ResponseEnvelope(status = "OK", data = AgentCheckInResponse(resultsAccepted = 1))
+        }
+        val pending = PendingResults().apply { add(listOf(ack("a"), ack("b"), ack("c"))) }
+
+        val coordinator = coordinator(api, pending)
+        coordinator.runOnce()
+        coordinator.runOnce()
+
+        assertEquals(listOf(listOf("a", "b", "c"), listOf("b", "c")),
+            api.checkInRequests.map { r -> r.results.map { it.commandId } })
+        assertEquals(listOf("c"), pending.drain().map { it.commandId })
     }
 }
