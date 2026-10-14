@@ -1,6 +1,6 @@
 # Releasing MDMesh
 
-<sub>[← README](README.md) · [Deploy](DEPLOY.md) · [Structure](STRUCTURE.md) · [Contributing](CONTRIBUTING.md) · **Releasing**</sub>
+<sub>[← README](README.md) · [Deploy](DEPLOY.md) · [Upgrading](docs/UPGRADING.md) · [Operations](docs/OPERATIONS.md) · [Structure](STRUCTURE.md) · [Contributing](CONTRIBUTING.md) · **Releasing**</sub>
 
 Cutting a release is one command — push an annotated semver tag (its message opens the release notes):
 

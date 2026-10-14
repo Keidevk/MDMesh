@@ -24,7 +24,7 @@ result() {   # result POINT VERDICT DETAIL — one row of $OUT/results.tsv
 
 # --- image + containers ----------------------------------------------------------------------------------------------
 # Pinned workaround downloads (tests/native/Dockerfile, layer 3), for installers from before they fetched Node 24 / JDK 17
-# themselves (v0.3.2 and older); see docs/DEV.md "T2 native rig".
+# themselves (v0.3.2 and older).
 NODE_URL=https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz
 NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
 JDK17_URL=https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz
