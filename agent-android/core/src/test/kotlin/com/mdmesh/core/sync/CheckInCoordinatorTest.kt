@@ -177,6 +177,46 @@ class CheckInCoordinatorTest {
     }
 
     @Test
+    fun `remembers when a check-in last reached the server`() = runTest {
+        val api = FakeMdmApi().apply { checkInThrows = IOException("network down") }
+        val last = InMemoryLastCheckIn()
+        val coordinator = coordinator(api, PendingResults(), syncStatus = SyncStatus(last))
+        runCatching { coordinator.runOnce() }
+        assertNull("a failed check-in is not recorded", last.okAtMs)
+        api.checkInThrows = null
+        coordinator.runOnce()
+        assertNotNull(last.okAtMs)
+    }
+
+    @Test
+    fun `a rejected check-in is not recorded as reaching the server`() = runTest {
+        val last = InMemoryLastCheckIn()
+        val api = FakeMdmApi().apply { checkInResponse = ResponseEnvelope(status = "ERROR", message = "nope") }
+        val coordinator = coordinator(api, PendingResults(), syncStatus = SyncStatus(last))
+        runCatching { coordinator.runOnce() }
+        assertNull("ERROR envelope", last.okAtMs)
+        api.checkInResponse = ResponseEnvelope(status = "OK", data = null)
+        runCatching { coordinator.runOnce() }
+        assertNull("OK without data", last.okAtMs)
+    }
+
+    @Test
+    fun `the check-in counts as reaching the server before its commands run`() = runTest {
+        // A long command (an app.install download) must not look like a missed check-in.
+        val api = FakeMdmApi().apply {
+            checkInResponse = ResponseEnvelope(
+                status = "OK",
+                data = AgentCheckInResponse(commands = listOf(command("c1").copy(type = "test.hang"))),
+            )
+        }
+        val last = InMemoryLastCheckIn()
+        val cycle = launch { coordinator(api, PendingResults(), syncStatus = SyncStatus(last)).runOnce() }
+        testScheduler.advanceUntilIdle()
+        assertNotNull("recorded while the command is still running", last.okAtMs)
+        cycle.cancel()
+    }
+
+    @Test
     fun `delivered acks leave the persisted buffer only after the check-in succeeds`() = runTest {
         val backup = FakeBackup()
         val old = CommandResult(commandId = "old", status = CommandStatus.DONE, completedAt = "t")

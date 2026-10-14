@@ -41,7 +41,7 @@ import com.hmdm.rest.filter.PublicIPFilter;
 import com.hmdm.rest.json.Response;
 import com.hmdm.util.CryptoUtil;
 import com.hmdm.util.HostedFiles;
-import org.apache.poi.util.IOUtils;
+import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -115,14 +115,14 @@ public class DownloadFilesServlet extends HttpServlet {
                 return;
             }
 
-            String range = req.getHeader("Range");
-            if (range != null && range.startsWith("bytes=")) {
-                sendPartialContent(range.substring(6), file, resp);
+            // XSS: never let a hosted file open as a page on the server's domain (full and partial responses)
+            resp.addHeader("Content-Disposition", "attachment; filename=\"" + file.getName() + "\"");
+            String range = singleRange(req.getHeader("Range"));
+            if (range != null) {
+                sendPartialContent(range, file, resp);
                 return;
             }
 
-            // Cross XSS vulnerability fix: prevent opening a potentially malicious file having the Headwind MDM domain
-            resp.addHeader("Content-Disposition", "attachment; filename=\"" + file.getName() + "\"");
             try (InputStream input = new FileInputStream(file);
                  ServletOutputStream outputStream = resp.getOutputStream()) {
                 long length = file.length();
@@ -135,7 +135,7 @@ public class DownloadFilesServlet extends HttpServlet {
                     resp.setContentType(CONTENT_TYPE_APK);
                 }
 
-                IOUtils.copy(input, outputStream);
+                IOUtils.copyLarge(input, outputStream);
                 outputStream.flush();
             } catch (Exception e) {
                 e.printStackTrace();
@@ -169,38 +169,64 @@ public class DownloadFilesServlet extends HttpServlet {
         }
     }
 
-    private void sendPartialContent(String rangeStr, File file, HttpServletResponse resp) {
+    /**
+     * @return the spec of a single {@code bytes=} range, or null when there is none. A multi-range request is
+     *         served as the whole file (allowed by RFC 9110), so it gets null too.
+     */
+    static String singleRange(String header) {
+        return header != null && header.startsWith("bytes=") && !header.contains(",") ? header.substring(6) : null;
+    }
+
+    /**
+     * <p>Parses a single {@code bytes=} range spec ({@code first-last}, {@code first-} or the suffix {@code -n}).</p>
+     *
+     * @return the first and last byte (both inclusive) clamped to the file, or null when it is malformed or
+     *         unsatisfiable.
+     */
+    static long[] byteRange(String rangeStr, long length) {
         try {
-            String[] range = rangeStr.split("-");
-            Long start = Long.parseLong(range[0]);
-            Long end = null;
-            if (range.length > 1) {
-                end = Long.parseLong(range[1]);
-            }
-            InputStream input = new FileInputStream(file);
-            ServletOutputStream outputStream = resp.getOutputStream();
-            long length = file.length();
-            if (end == null) {
-                end = length;
-            }
-
-            resp.setStatus(206);
-            resp.setHeader("Content-Range", "bytes " + start + "-" + end + "/" + length);
-            long contentLength = end - start;
-            if (length <= 2147483647L) {
-                resp.setContentLength((int)contentLength);
+            String[] parts = rangeStr.trim().split("-", 2);
+            if (parts.length < 2) return null;
+            String a = parts[0].trim();
+            String b = parts[1].trim();
+            long first;
+            long last;
+            if (a.isEmpty()) {
+                first = Math.max(0, length - Long.parseLong(b)); // the last n bytes
+                last = length - 1;
             } else {
-                resp.addHeader("Content-Length", Long.toString(contentLength));
+                first = Long.parseLong(a);
+                last = b.isEmpty() ? length - 1 : Math.min(Long.parseLong(b), length - 1);
             }
-            if (file.getAbsolutePath().endsWith(".apk")) {
-                resp.setContentType(CONTENT_TYPE_APK);
-            }
+            return first >= 0 && first <= last ? new long[]{first, last} : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 
-            input.skip(start);
-
-            IOUtils.copy(input, outputStream, contentLength);
+    private void sendPartialContent(String rangeStr, File file, HttpServletResponse resp) {
+        long length = file.length();
+        long[] range = byteRange(rangeStr, length);
+        if (range == null) {
+            resp.setStatus(416);
+            resp.setHeader("Content-Range", "bytes */" + length);
+            return;
+        }
+        long contentLength = range[1] - range[0] + 1;
+        resp.setStatus(206);
+        resp.setHeader("Content-Range", "bytes " + range[0] + "-" + range[1] + "/" + length);
+        if (contentLength <= 2147483647L) {
+            resp.setContentLength((int) contentLength);
+        } else {
+            resp.addHeader("Content-Length", Long.toString(contentLength));
+        }
+        if (file.getAbsolutePath().endsWith(".apk")) {
+            resp.setContentType(CONTENT_TYPE_APK);
+        }
+        try (InputStream input = new FileInputStream(file);
+             ServletOutputStream outputStream = resp.getOutputStream()) {
+            IOUtils.copyLarge(input, outputStream, range[0], contentLength);
             outputStream.flush();
-
         } catch (Exception e) {
             e.printStackTrace();
         }

@@ -15,7 +15,8 @@ Advertised only when the device has a working strategy for it (`CapabilityRegist
 
 | key | meaning | min SDK | notes |
 |-----|---------|---------|-------|
-| `wifi` | toggle/lock Wi-Fi | 24 | |
+| `wifi` | lock/allow the Wi-Fi settings | 24 | `false` = `DISALLOW_CONFIG_WIFI` (+ configured-networks lockdown on API 30+). Does **not** switch the radio; see `wifiRadio`. |
+| `wifiRadio` | switch the Wi-Fi radio on/off | 24 | 1.4. `WifiManager.setWifiEnabled` (Device Owner is exempt from the API 29 restriction). Off is deferred (outcome `deferred: <reason>`, does not block the document) while Wi-Fi is the only validated non-VPN network, and only tried again on the next config.apply or boot re-apply (a configuration change, reboot or agent update), so devices whose OEM drops mobile data while Wi-Fi is connected never apply it; on API 33+ off also adds `DISALLOW_CHANGE_WIFI_STATE`, on lifts it, and so does the key becoming unmanaged (radio left as is). Self-heal: if no check-in reaches the server for 30 minutes after Off turned Wi-Fi off (checked on the agent heartbeat), the agent turns Wi-Fi back on, lifts the restriction and holds Wi-Fi on until a document with a revision other than the last delivered one arrives (Off reports `deferred: no connection to the server ...`). It then reports `appliedConfigRevision` = 64 zeros, which matches no configuration, so the server re-sends config.apply after its normal backoff. Device Owner only. |
 | `bluetooth` | toggle/lock Bluetooth | 24 | BLUETOOTH_SCAN auto-grant fails if target app targetSdk<=30 |
 | `usbStorage` | block USB mass storage | 24 | |
 | `camera` | disable camera | 24 | |
@@ -61,6 +62,7 @@ string, except `configApply`.
 | `powerMode` | `device.powerMode` | `device.powerMode` |
 | `locationMode` | `device.locationMode` | `device.locationMode` |
 | `configApply` | `device.configApply` | `config.apply` |
+| `locationOff` | `device.locationOff` | `device.locationMode` with `mode: "off"` (1.4: the agent honours `off`; older agents read it as passive) |
 
 ## Command types
 
@@ -75,7 +77,7 @@ string, except `configApply`.
 | `app.uninstall` | — | `{ packageName }`; no console or server sender yet |
 | `apps.scan` | — | none; result detail is `{ apps: [...] }` |
 | `apps.icons` | — | `{ packages: [...] }`; result detail is `{ icons: [{ pkg, pngBase64 }] }` |
-| `kiosk.enter` | — | `{ mode, allowedPackages, pinPackage, features, exitMode, password, theme }` (`KioskApplyPayload`) |
+| `kiosk.enter` | — | `{ mode, allowedPackages, pinPackage, features, exitMode, password, theme }` (`KioskApplyPayload`); `features.lockButtons` blocks the power menu, `features.lockVolume` (1.4) blocks volume changes and mutes while in kiosk |
 | `kiosk.exit` | — | none |
 | `device.lock` | `device.lock` | none |
 | `device.reboot` | `device.reboot` | none (DO) |
@@ -86,7 +88,7 @@ string, except `configApply`.
 | `device.passcodeReset` | `device.passcodeReset` | `{ newPassword }` (empty clears it) |
 | `device.wipe` | `device.wipe` | none |
 | `device.powerMode` | `device.powerMode` | `{ mode: "adaptive" \| "alwaysOn" }` |
-| `device.locationMode` | `device.locationMode` | `{ mode: "passive" \| "active" }` |
+| `device.locationMode` | `device.locationMode` (`device.locationOff` for `off`) | `{ mode: "passive" \| "active" \| "off" }`; `off` (1.4) reads no location at all |
 | `app.launch` | — | `{ packageName, activity? }`. Planned: no agent handler yet (a device replies `unsupported`). |
 | `remote.startSession` | `remote.view` or `remote.control` | `{ sessionId, signaling: {...}, mode: "view"\|"control" }`. Planned: no agent handler yet. |
 | `remote.stopSession` | — | `{ sessionId }`. Planned: no agent handler yet. |

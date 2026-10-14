@@ -39,6 +39,8 @@ import com.mdmesh.core.command.handlers.PolicyApplyHandler
 import com.mdmesh.core.device.AppInventoryCollector
 import com.mdmesh.core.device.HardwareIdCollector
 import com.mdmesh.core.sync.HardwareIdSource
+import com.mdmesh.core.sync.LastCheckIn
+import com.mdmesh.core.sync.SharedPrefsLastCheckIn
 import com.mdmesh.core.install.InstallManager
 import com.mdmesh.core.state.DeviceStateCollector
 import com.mdmesh.core.state.DeviceStateSource
@@ -66,7 +68,9 @@ import com.mdmesh.oem.KnoxAdapter
 import com.mdmesh.oem.OemAdapter
 import com.mdmesh.policy.CapabilityRegistry
 import com.mdmesh.policy.TogglePolicy
+import com.mdmesh.policy.wifi.AndroidWifiRadio
 import com.mdmesh.policy.wifi.DpmHandle
+import com.mdmesh.policy.wifi.SharedPrefsWifiRadioOffState
 import com.mdmesh.remote.RemoteControlTierDetector
 import dagger.Module
 import dagger.Provides
@@ -97,8 +101,8 @@ object AgentModule {
 
     @Provides
     @Singleton
-    fun provideCapabilityRegistry(handle: DpmHandle): CapabilityRegistry =
-        CapabilityRegistry(handle)
+    fun provideCapabilityRegistry(@ApplicationContext context: Context, handle: DpmHandle): CapabilityRegistry =
+        CapabilityRegistry(handle, AndroidWifiRadio.from(context), SharedPrefsWifiRadioOffState(context))
 
     @Provides
     @Singleton
@@ -325,6 +329,10 @@ object AgentModule {
     @Singleton
     fun provideConfigStateStore(@ApplicationContext context: Context): ConfigStateStore =
         SharedPrefsConfigStateStore(context)
+
+    @Provides
+    @Singleton
+    fun provideLastCheckIn(@ApplicationContext context: Context): LastCheckIn = SharedPrefsLastCheckIn(context)
 
     @Provides
     @Singleton
