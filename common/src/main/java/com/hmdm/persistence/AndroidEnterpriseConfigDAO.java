@@ -26,6 +26,8 @@ import com.google.inject.Singleton;
 import com.hmdm.persistence.domain.AndroidEnterpriseConfig;
 import com.hmdm.persistence.mapper.AndroidEnterpriseConfigMapper;
 
+import java.util.List;
+
 @Singleton
 public class AndroidEnterpriseConfigDAO {
 
@@ -46,6 +48,18 @@ public class AndroidEnterpriseConfigDAO {
 
     public AndroidEnterpriseConfig findByEnterpriseId(String enterpriseId) {
         return mapper.findByEnterpriseId(enterpriseId);
+    }
+
+    public AndroidEnterpriseConfig findById(int id) {
+        return mapper.findById(id);
+    }
+
+    public AndroidEnterpriseConfig findSingleConfig() {
+        return mapper.findSingleConfig();
+    }
+
+    public List<AndroidEnterpriseConfig> findAll() {
+        return mapper.findAll();
     }
 
     public void update(AndroidEnterpriseConfig config) {

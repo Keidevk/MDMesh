@@ -102,8 +102,26 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   }
 
   if (!res.ok) {
+    // The server may still return the standard JSON envelope (with a detailed
+    // message) on an error status. Prefer that over a bare "HTTP xxx" message so
+    // the real failure reason is visible in the UI.
+    let detail = '';
+    try {
+      const bodyText = await res.text();
+      if (bodyText) {
+        try {
+          const parsed = JSON.parse(bodyText) as { message?: string; status?: string };
+          if (parsed.message) detail = parsed.message;
+        } catch {
+          const trimmed = bodyText.trim();
+          if (trimmed && !trimmed.startsWith('<')) detail = trimmed;
+        }
+      }
+    } catch {
+      // ignore body-read failures
+    }
     throw new ApiError(
-      `Request failed with HTTP ${res.status}`,
+      detail || `Request failed with HTTP ${res.status}`,
       'ERROR',
       res.status,
     );

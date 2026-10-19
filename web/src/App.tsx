@@ -12,6 +12,9 @@ import { AppsPage } from './pages/AppsPage';
 import { ConfigurationsPage } from './pages/ConfigurationsPage';
 import { EnrollPage } from './pages/EnrollPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { EnterpriseDevicesPage } from './pages/EnterpriseDevicesPage';
+import { EnterpriseEnrollPage } from './pages/EnterpriseEnrollPage';
+import { EnterpriseSettingsPage } from './pages/EnterpriseSettingsPage';
 
 export default function App() {
   return (
@@ -28,8 +31,11 @@ export default function App() {
               <Route path="/devices/:id" element={<DeviceDetailPage />} />
               <Route path="/apps" element={<AppsPage />} />
               <Route path="/configs" element={<ConfigurationsPage />} />
-              <Route path="/enroll" element={<EnrollPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
+<Route path="/enroll" element={<EnrollPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/enterprise/devices" element={<EnterpriseDevicesPage />} />
+            <Route path="/enterprise/enroll" element={<EnterpriseEnrollPage />} />
+            <Route path="/enterprise/settings" element={<EnterpriseSettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>

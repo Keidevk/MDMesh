@@ -38,6 +38,8 @@ import com.hmdm.rest.json.agent.ConfigStatusView;
 import com.hmdm.rest.json.agent.ConfigSyncSummary;
 import com.hmdm.rest.json.agent.EnterpriseCommandRequest;
 import com.hmdm.rest.json.agent.EnterpriseEnrollmentTokenRequest;
+import com.hmdm.rest.json.view.devicelist.DeviceView;
+import com.hmdm.rest.json.view.devicelist.EnterpriseDeviceListView;
 import com.hmdm.rest.resource.support.ConfigReconciler;
 import com.hmdm.security.SecurityContext;
 import com.hmdm.service.AndroidEnterpriseService;
@@ -524,16 +526,26 @@ public class AgentAdminResource {
         AndroidEnterpriseService.EnrollmentTokenResult result;
         try {
             result = enterpriseService.createEnrollmentToken(
-                    customerId.get(),
-                    request.getConfigurationId(),
                     request.getOneTime() != null ? request.getOneTime() : true,
                     request.getDurationMillis() != null ? request.getDurationMillis() : 86400000L
             );
         } catch (IllegalStateException e) {
             return Response.ERROR(e.getMessage());
         } catch (Exception e) {
-            logger.error("Failed to create enterprise enrollment token", e);
-            return Response.ERROR("error.enterprise.token.create.failed");
+            StringBuilder sb = new StringBuilder();
+            sb.append("Failed to create enterprise enrollment token");
+            sb.append(": ").append(e.getClass().getSimpleName()).append(" - ").append(e.getMessage());
+            Throwable cause = e.getCause();
+            if (cause != null && cause != e) {
+                sb.append("; caused by: ").append(cause.getClass().getSimpleName()).append(" - ").append(cause.getMessage());
+            }
+            Throwable root = cause;
+            while (root != null && root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
+                sb.append("; root cause: ").append(root.getClass().getSimpleName()).append(" - ").append(root.getMessage());
+            }
+            logger.error(sb.toString(), e);
+            return Response.ERROR(sb.toString());
         }
 
         Map<String, Object> response = new HashMap<>();
@@ -543,7 +555,7 @@ public class AgentAdminResource {
         return Response.OK(response);
     }
 
-    @ApiOperation(value = "List enterprise devices", notes = "Lists all devices enrolled via Android Management API for the current customer.")
+    @ApiOperation(value = "List enterprise devices", notes = "Lists the customer's devices enrolled via the Android Management API.")
     @GET
     @Path("/enterprise/devices")
     @Produces(MediaType.APPLICATION_JSON)
@@ -553,15 +565,13 @@ public class AgentAdminResource {
             return Response.PERMISSION_DENIED();
         }
 
-        if (enterpriseService == null) {
-            return Response.ERROR("error.enterprise.not.configured");
-        }
-
         try {
-            List<com.google.api.services.androidmanagement.v1.model.Device> devices = enterpriseService.listDevices(customerId.get());
-            return Response.OK(devices);
-        } catch (IllegalStateException e) {
-            return Response.ERROR(e.getMessage());
+            List<Device> enterpriseDevices = unsecureDAO.getEnterpriseDevices(customerId.get());
+            List<DeviceView> views = new ArrayList<>();
+            for (Device device : enterpriseDevices) {
+                views.add(new DeviceView(device));
+            }
+            return Response.OK(new EnterpriseDeviceListView(views));
         } catch (Exception e) {
             logger.error("Failed to list enterprise devices", e);
             return Response.ERROR("error.enterprise.devices.list.failed");
@@ -628,8 +638,20 @@ public class AgentAdminResource {
         } catch (IllegalStateException e) {
             return Response.ERROR(e.getMessage());
         } catch (Exception e) {
-            logger.error("Failed to delete enterprise device", e);
-            return Response.ERROR("error.enterprise.device.delete.failed");
+            StringBuilder sb = new StringBuilder();
+            sb.append("Failed to create enterprise enrollment token");
+            sb.append(": ").append(e.getClass().getSimpleName()).append(" - ").append(e.getMessage());
+            Throwable cause = e.getCause();
+            if (cause != null && cause != e) {
+                sb.append("; caused by: ").append(cause.getClass().getSimpleName()).append(" - ").append(cause.getMessage());
+            }
+            Throwable root = cause;
+            while (root != null && root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
+                sb.append("; root cause: ").append(root.getClass().getSimpleName()).append(" - ").append(root.getMessage());
+            }
+            logger.error(sb.toString(), e);
+            return Response.ERROR(sb.toString());
         }
     }
 
@@ -652,13 +674,51 @@ public class AgentAdminResource {
 
         try {
             List<com.google.api.services.androidmanagement.v1.model.Device> devices = enterpriseService.listDevices(customerId.get());
-            int synced = 0;
-            for (com.google.api.services.androidmanagement.v1.model.Device device : devices) {
-                // TODO: Sync device state to local DB (device_state table)
-                synced++;
+
+            // Index local enterprise devices by their AM resource name and by the bare device id,
+            // so we match whether the stored value is the full name or just the trailing id.
+            Map<String, Device> localByRef = new HashMap<>();
+            for (Device local : unsecureDAO.getEnterpriseDevices(customerId.get())) {
+                String ref = local.getEnterpriseDeviceId();
+                if (ref == null) {
+                    continue;
+                }
+                localByRef.put(ref, local);
+                int slash = ref.lastIndexOf('/');
+                if (slash >= 0) {
+                    localByRef.putIfAbsent(ref.substring(slash + 1), local);
+                }
             }
+
+            int synced = 0;
+            int unmatched = 0;
+            if (devices != null) {
+                for (com.google.api.services.androidmanagement.v1.model.Device device : devices) {
+                    String name = device.getName();
+                    Device local = name != null ? localByRef.get(name) : null;
+                    if (local == null && name != null) {
+                        int slash = name.lastIndexOf('/');
+                        if (slash >= 0) {
+                            local = localByRef.get(name.substring(slash + 1));
+                        }
+                    }
+                    if (local == null) {
+                        unmatched++;
+                        continue;
+                    }
+                    // Persist the observed AM state into the local device row: last-seen time drives
+                    // the admin UI online/offline indicator, and the Android version feeds the list view.
+                    commandDAO.touchLastUpdate(local.getNumber());
+                    if (device.getSoftwareInfo() != null && device.getSoftwareInfo().getAndroidVersion() != null) {
+                        commandDAO.updateAndroidVersion(local.getNumber(), device.getSoftwareInfo().getAndroidVersion());
+                    }
+                    synced++;
+                }
+            }
+
             Map<String, Object> result = new HashMap<>();
             result.put("synced", synced);
+            result.put("unmatched", unmatched);
             return Response.OK(result);
         } catch (IllegalStateException e) {
             return Response.ERROR(e.getMessage());
@@ -674,20 +734,10 @@ public class AgentAdminResource {
 
         switch (type) {
             case "WIPE":
-                Boolean userWipe = payload != null ? (Boolean) payload.get("userWipe") : false;
-                return AndroidEnterpriseService.buildWipeCommand(userWipe != null ? userWipe : false);
+                Boolean wipeExternalStorage = payload != null ? (Boolean) payload.get("userWipe") : false;
+                return AndroidEnterpriseService.buildWipeCommand(wipeExternalStorage != null && wipeExternalStorage);
             case "LOCK":
-                String message = payload != null ? (String) payload.get("lockMessage") : null;
-                return AndroidEnterpriseService.buildLockCommand(message);
-            case "INSTALL_APP":
-                String packageName = payload != null ? (String) payload.get("packageName") : null;
-                Long versionCode = payload != null ? (Long) payload.get("versionCode") : null;
-                if (packageName == null) return null;
-                return AndroidEnterpriseService.buildInstallAppCommand(packageName, versionCode);
-            case "UNINSTALL_APP":
-                String uninstallPkg = payload != null ? (String) payload.get("packageName") : null;
-                if (uninstallPkg == null) return null;
-                return AndroidEnterpriseService.buildUninstallAppCommand(uninstallPkg);
+                return AndroidEnterpriseService.buildLockCommand();
             case "CLEAR_APP_DATA":
                 String clearPkg = payload != null ? (String) payload.get("packageName") : null;
                 if (clearPkg == null) return null;
@@ -695,6 +745,7 @@ public class AgentAdminResource {
             case "REBOOT":
                 return AndroidEnterpriseService.buildRebootCommand();
             default:
+                // App install/uninstall are managed through the policy (applications list), not commands.
                 return null;
         }
     }

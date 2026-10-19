@@ -520,6 +520,27 @@ public class AgentResource {
     // Android Management API Enterprise Endpoints
     // =================================================================================================================
 
+    /** Returns "enterprises/{id}" when the given AM API resource name carries an enterprise id. */
+    private static String extractEnterpriseId(String resourceName) {
+        if (resourceName == null) {
+            return null;
+        }
+        String[] parts = resourceName.split("/");
+        if (parts.length >= 2 && "enterprises".equals(parts[0]) && !parts[1].isEmpty()) {
+            return parts[0] + "/" + parts[1];
+        }
+        return null;
+    }
+
+    /** True when the given value is a full enrollment token resource name (not a bare token value). */
+    private static boolean isEnrollmentTokenName(String resourceName) {
+        if (resourceName == null) {
+            return false;
+        }
+        String[] parts = resourceName.split("/");
+        return parts.length >= 4 && "enterprises".equals(parts[0]) && "enrollmentTokens".equals(parts[2]);
+    }
+
     @ApiOperation(value = "Enroll an agent via Android Management API", notes = "Validates an enterprise enrollment token and registers the device.")
     @POST
     @Path("/enterprise/enroll")
@@ -534,42 +555,51 @@ public class AgentResource {
             return Response.ERROR("error.enterprise.not.configured");
         }
 
-        // Validate enrollment token with Android Management API
-        com.google.api.services.androidmanagement.v1.model.EnrollmentToken token;
-        try {
-            // Extract enterprise ID from token (format: enterprises/{enterpriseId}/enrollmentTokens/{tokenId})
-            String[] parts = request.getEnrollmentToken().split("/");
-            if (parts.length < 4 || !"enterprises".equals(parts[0]) || !"enrollmentTokens".equals(parts[2])) {
-                return Response.ERROR("error.agent.token.invalid");
-            }
-            String enterpriseId = parts[0] + "/" + parts[1];
-            
-            // Find config by enterprise ID
-            com.hmdm.persistence.domain.AndroidEnterpriseConfig config = enterpriseService.getConfigByEnterpriseId(enterpriseId);
-            if (config == null || !config.isEnabled()) {
-                return Response.ERROR("error.enterprise.not.configured");
-            }
-            
-            token = enterpriseService.getEnrollmentToken(config.getCustomerId(), request.getEnrollmentToken());
-            if (token == null) {
-                return Response.ERROR("error.agent.token.invalid");
-            }
-        } catch (IllegalStateException e) {
-            return Response.ERROR(e.getMessage());
-        } catch (Exception e) {
-            logger.error("Failed to validate enterprise enrollment token", e);
+        String enrollmentToken = request.getEnrollmentToken().trim();
+        String deviceRef = request.getDeviceId() != null ? request.getDeviceId().trim() : null;
+
+        // A DPC may report the enrollment token resource name
+        // (enterprises/{enterpriseId}/enrollmentTokens/{tokenId}) or only its opaque value. In the
+        // latter case the enterprise is recovered from the device resource name
+        // (enterprises/{enterpriseId}/devices/{deviceId}).
+        String enterpriseId = extractEnterpriseId(enrollmentToken);
+        if (enterpriseId == null) {
+            enterpriseId = extractEnterpriseId(deviceRef);
+        }
+        if (enterpriseId == null) {
             return Response.ERROR("error.agent.token.invalid");
         }
 
-        // Get device ID from request (provided by DPC after provisioning)
-        String enterpriseDeviceId = request.getDeviceId();
-        if (enterpriseDeviceId == null || enterpriseDeviceId.trim().isEmpty()) {
-            return Response.ERROR("error.enterprise.device.id.required");
+        com.hmdm.persistence.domain.AndroidEnterpriseConfig config =
+                enterpriseService.getConfigByEnterpriseId(enterpriseId);
+        if (config == null || !config.isEnabled()) {
+            return Response.ERROR("error.enterprise.not.configured");
         }
 
-        // Get customer ID from config
-        com.hmdm.persistence.domain.AndroidEnterpriseConfig config = enterpriseService.getConfigByEnterpriseId(
-                request.getEnrollmentToken().split("/")[0] + "/" + request.getEnrollmentToken().split("/")[1]);
+        // Only a full resource name can be resolved against the AM API. This confirms the token was
+        // not revoked or already consumed before we register the device.
+        if (isEnrollmentTokenName(enrollmentToken)) {
+            try {
+                if (enterpriseService.getEnrollmentToken(config.getCustomerId(), enrollmentToken) == null) {
+                    return Response.ERROR("error.agent.token.invalid");
+                }
+            } catch (IllegalStateException e) {
+                return Response.ERROR(e.getMessage());
+            } catch (Exception e) {
+                logger.error("Failed to validate enterprise enrollment token", e);
+                return Response.ERROR("error.agent.token.invalid");
+            }
+        }
+
+        // Always persist the full AM API resource name (enterprises/{id}/devices/{deviceId}); the
+        // admin command/delete endpoints pass this value straight back to the AM API.
+        if (deviceRef == null || deviceRef.isEmpty()) {
+            return Response.ERROR("error.enterprise.device.id.required");
+        }
+        String enterpriseDeviceId = deviceRef.startsWith("enterprises/")
+                ? deviceRef
+                : enterpriseId + "/devices/" + deviceRef;
+
         int customerId = config.getCustomerId();
 
         // Determine configuration ID (from request or customer default)

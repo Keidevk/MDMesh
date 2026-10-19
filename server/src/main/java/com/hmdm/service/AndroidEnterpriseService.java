@@ -26,15 +26,19 @@ import com.google.api.client.http.HttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.services.androidmanagement.v1.AndroidManagement;
+import com.google.api.services.androidmanagement.v1.model.ClearAppsDataParams;
 import com.google.api.services.androidmanagement.v1.model.Command;
 import com.google.api.services.androidmanagement.v1.model.Device;
 import com.google.api.services.androidmanagement.v1.model.EnrollmentToken;
 import com.google.api.services.androidmanagement.v1.model.Operation;
+import com.google.api.services.androidmanagement.v1.model.WipeParams;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.hmdm.persistence.AndroidEnterpriseConfigDAO;
+import com.hmdm.persistence.GlobalSettingsDAO;
 import com.hmdm.persistence.domain.AndroidEnterpriseConfig;
 import com.hmdm.util.CryptoUtil;
+import org.mybatis.guice.transactional.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,25 +48,29 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 @Singleton
 public class AndroidEnterpriseService {
 
     private static final Logger logger = LoggerFactory.getLogger(AndroidEnterpriseService.class);
     private static final JsonFactory JSON_FACTORY = GsonFactory.getDefaultInstance();
-    private static final String AES_PASSWORD = "headwind-mdm-enterprise-aes-key-2024";
-    private static final long DEFAULT_TOKEN_DURATION_MS = 24L * 60 * 60 * 1000;
+    private static final long DEFAULT_DURATION_MILLIS = 86400_000L;
 
     private final AndroidEnterpriseConfigDAO configDAO;
+    private final GlobalSettingsDAO globalSettingsDAO;
     private final HttpTransport httpTransport;
 
     @Inject
-    public AndroidEnterpriseService(AndroidEnterpriseConfigDAO configDAO) throws GeneralSecurityException, IOException {
+    public AndroidEnterpriseService(AndroidEnterpriseConfigDAO configDAO,
+                                    GlobalSettingsDAO globalSettingsDAO) {
         this.configDAO = configDAO;
-        this.httpTransport = GoogleNetHttpTransport.newTrustedTransport();
+        this.globalSettingsDAO = globalSettingsDAO;
+        try {
+            this.httpTransport = GoogleNetHttpTransport.newTrustedTransport();
+        } catch (GeneralSecurityException | IOException e) {
+            throw new RuntimeException("Failed to initialize HTTP transport for Android Enterprise", e);
+        }
     }
 
     private AndroidManagement createClient(int customerId) {
@@ -71,9 +79,38 @@ public class AndroidEnterpriseService {
             logger.warn("Enterprise config not found or disabled for customer {}", customerId);
             return null;
         }
-
         try {
-            String serviceAccountJson = CryptoUtil.decryptAES(config.getServiceAccountJsonEnc(), AES_PASSWORD);
+            return buildClient(config);
+        } catch (Exception e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Creates an Android Management client bound to the single global enterprise configuration.
+     * Used by the Single-Tenant enrollment flow: there is exactly one enterprise for this instance.
+     */
+    private AndroidManagement createGlobalClient() {
+        AndroidEnterpriseConfig config = configDAO.findSingleConfig();
+        if (config == null || !config.isEnabled()) {
+            logger.warn("Global enterprise config not found or disabled");
+            return null;
+        }
+        try {
+            return buildClient(config);
+        } catch (Exception e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
+    private AndroidManagement buildClient(AndroidEnterpriseConfig config) {
+        String aesPassword = getAesPassword();
+        if (aesPassword == null) {
+            throw new IllegalStateException("Android Enterprise encryption password is not configured. "
+                    + "Set it in the Android Enterprise settings.");
+        }
+        try {
+            String serviceAccountJson = CryptoUtil.decryptAES(config.getServiceAccountJsonEnc(), aesPassword);
             GoogleCredentials credentials = ServiceAccountCredentials.fromStream(
                     new ByteArrayInputStream(serviceAccountJson.getBytes()))
                     .createScoped(Collections.singletonList("https://www.googleapis.com/auth/androidmanagement"));
@@ -87,9 +124,93 @@ public class AndroidEnterpriseService {
                 }
             }).setApplicationName("Headwind-MDM").build();
         } catch (Exception e) {
-            logger.error("Failed to create AndroidManagement client for customer {}", customerId, e);
-            return null;
+            logger.error("Failed to create AndroidManagement client for enterprise {}", config.getEnterpriseId(), e);
+            StringBuilder sb = new StringBuilder();
+            sb.append("Failed to create Android Management client");
+            if (config != null && config.getEnterpriseId() != null) {
+                sb.append(" [enterpriseId=").append(config.getEnterpriseId()).append("]");
+            }
+            sb.append(" [projectId=").append(config != null ? config.getProjectId() : null).append("]");
+            sb.append(": ").append(describeThrowable(e, true));
+            throw new IllegalStateException(sb.toString(), e);
         }
+    }
+
+    /**
+     * Builds a complete, human-readable description of a throwable chain: every nested cause
+     * (class name + message) plus the full stack trace, so the failure reason can be shown in
+     * the web UI even when server logs are not accessible.
+     */
+    private static String describeThrowable(Throwable e, boolean includeStackTrace) {
+        StringBuilder sb = new StringBuilder();
+        Throwable current = e;
+        int depth = 0;
+        while (current != null && depth < 10) {
+            if (depth > 0) {
+                sb.append(" | caused by: ");
+            }
+            sb.append(current.getClass().getName());
+            if (current.getMessage() != null) {
+                sb.append(": ").append(current.getMessage());
+            } else {
+                sb.append(" (no message)");
+            }
+            Throwable next = current.getCause();
+            if (next == current) {
+                break;
+            }
+            current = next;
+            depth++;
+        }
+        if (includeStackTrace) {
+            sb.append(" || stack trace: ");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            e.printStackTrace(new java.io.PrintWriter(sw));
+            sb.append(sw.toString().replace("\r\n", " >> ").replace('\n', ' '));
+        }
+        return sb.toString();
+    }
+
+    private String getAesPassword() {
+        String password = globalSettingsDAO.getEnterpriseAesPassword();
+        return password == null || password.trim().isEmpty() ? null : password;
+    }
+
+    public boolean isAesPasswordConfigured() {
+        return getAesPassword() != null;
+    }
+
+    public String encryptServiceAccount(String serviceAccountJson, String aesPassword) {
+        return CryptoUtil.encryptAES(serviceAccountJson, aesPassword);
+    }
+
+    public void setGlobalAesPassword(String password) {
+        globalSettingsDAO.setEnterpriseAesPassword(password);
+    }
+
+    /**
+     * Re-encrypts every stored service-account JSON with the new instance-wide AES password.
+     * The old password must be able to decrypt the existing blobs, otherwise the transaction is
+     * aborted and no configuration is left with a password that cannot read it.
+     */
+    @Transactional
+    public void changeGlobalAesPassword(String oldPassword, String newPassword) {
+        for (AndroidEnterpriseConfig config : configDAO.findAll()) {
+            String encrypted = config.getServiceAccountJsonEnc();
+            if (encrypted == null || encrypted.isEmpty()) {
+                continue;
+            }
+            if (oldPassword != null && !oldPassword.isEmpty()) {
+                String plain = CryptoUtil.decryptAES(encrypted, oldPassword);
+                config.setServiceAccountJsonEnc(CryptoUtil.encryptAES(plain, newPassword));
+                configDAO.update(config);
+            } else {
+                // First password ever configured (no backfill): verify that it can actually decrypt
+                // the existing ciphertext before persisting it.
+                CryptoUtil.decryptAES(encrypted, newPassword);
+            }
+        }
+        globalSettingsDAO.setEnterpriseAesPassword(newPassword);
     }
 
     public void validateServiceAccountJson(String serviceAccountJson) {
@@ -101,35 +222,50 @@ public class AndroidEnterpriseService {
         }
     }
 
-    public EnrollmentTokenResult createEnrollmentToken(int customerId, Integer configurationId, boolean oneTime, long durationMillis) {
-        AndroidManagement client = createClient(customerId);
-        if (client == null) {
-            throw new IllegalStateException("Enterprise not configured for this customer");
+    public EnrollmentTokenResult createEnrollmentToken(boolean oneTime, long durationMillis) {
+        // Single-Tenant: there is exactly one enterprise configuration for this instance.
+        AndroidEnterpriseConfig config = configDAO.findSingleConfig();
+        if (config == null || !config.isEnabled()) {
+            throw new IllegalStateException("Android Enterprise is not configured or disabled");
         }
 
-        AndroidEnterpriseConfig config = configDAO.findByCustomerId(customerId);
-        if (config == null) {
-            throw new IllegalStateException("Enterprise config not found");
+        // The Android Management client is built from the global service account.
+        AndroidManagement client;
+        try {
+            client = createGlobalClient();
+        } catch (Exception e) {
+            // buildClient already produced a complete diagnostic message; don't bury it.
+            throw new IllegalStateException(e.getMessage() != null
+                    ? e.getMessage()
+                    : "Failed to create Android Management client: " + describeThrowable(e, true), e);
+        }
+        if (client == null) {
+            throw new IllegalStateException("Android Enterprise is not configured or disabled");
         }
 
         try {
             EnrollmentToken token = new EnrollmentToken();
-            token.setDuration(String.valueOf(durationMillis) + "ms");
-            // oneTime is not directly settable in newer API, handled by token expiration
-            token.setPolicyName("enterprises/" + config.getEnterpriseId() + "/policies/default");
+            // AM API expects a protobuf duration string terminated by 's' (e.g. "86400s").
+            token.setDuration((durationMillis / 1000L) + "s");
+            // Single-use tokens expire after the first enrollment.
+            token.setOneTimeOnly(oneTime);
 
             EnrollmentToken created = client.enterprises().enrollmentTokens()
                     .create(config.getEnterpriseId(), token)
                     .execute();
 
-            logger.info("Created enrollment token {} for customer {} (config {})", created.getName(), customerId, configurationId);
+            logger.info("Created enrollment token {} (oneTime={})", created.getName(), oneTime);
 
-            String qrCodeData = buildQrCodeData(config, created.getValue());
+            String qrCodeData = created.getQrCode();
+            if (qrCodeData == null || qrCodeData.trim().isEmpty()) {
+                qrCodeData = buildQrCodeData(config, created.getValue());
+            }
 
-            return new EnrollmentTokenResult(created, qrCodeData, configurationId);
+            return new EnrollmentTokenResult(created, qrCodeData, null);
         } catch (IOException e) {
-            logger.error("Failed to create enrollment token for customer {}", customerId, e);
-            throw new RuntimeException("Failed to create enrollment token: " + e.getMessage(), e);
+            logger.error("Failed to create enrollment token", e);
+            throw new IllegalStateException("Failed to create enrollment token [enterpriseId="
+                    + config.getEnterpriseId() + "]: " + describeThrowable(e, true), e);
         }
     }
 
@@ -279,90 +415,39 @@ public class AndroidEnterpriseService {
         }
     }
 
-    // Command builders - params field set via reflection or direct access (newer API)
-    public static Command buildWipeCommand(boolean userWipe) {
+    // Command builders. The CommandType values must be sent WITHOUT the "COMMAND_TYPE_" prefix
+    // (the enum name is serialized verbatim), and parameters must be set on the dedicated typed
+    // field (wipeParams / clearAppsDataParams) — there is no generic "params" field.
+    public static Command buildWipeCommand(boolean wipeExternalStorage) {
         Command cmd = new Command();
-        cmd.setType("COMMAND_TYPE_WIPE");
-        try {
-            java.lang.reflect.Field paramsField = Command.class.getDeclaredField("params");
-            paramsField.setAccessible(true);
-            Map<String, Object> params = new HashMap<>();
-            params.put("userWipe", userWipe);
-            paramsField.set(cmd, params);
-        } catch (Exception e) {
-            logger.warn("Could not set params on Command: {}", e.getMessage());
+        cmd.setType("WIPE");
+        if (wipeExternalStorage) {
+            WipeParams wipeParams = new WipeParams();
+            wipeParams.setWipeDataFlags(Collections.singletonList("WIPE_EXTERNAL_STORAGE"));
+            cmd.setWipeParams(wipeParams);
         }
         return cmd;
     }
 
-    public static Command buildLockCommand(String message) {
+    public static Command buildLockCommand() {
+        // LOCK takes no parameters (Android Management API does not support a lock message).
         Command cmd = new Command();
-        cmd.setType("COMMAND_TYPE_LOCK");
-        if (message != null && !message.isEmpty()) {
-            try {
-                java.lang.reflect.Field paramsField = Command.class.getDeclaredField("params");
-                paramsField.setAccessible(true);
-                Map<String, Object> params = new HashMap<>();
-                params.put("lockMessage", message);
-                paramsField.set(cmd, params);
-            } catch (Exception e) {
-                logger.warn("Could not set params on Command: {}", e.getMessage());
-            }
-        }
-        return cmd;
-    }
-
-    public static Command buildInstallAppCommand(String packageName, Long versionCode) {
-        Command cmd = new Command();
-        cmd.setType("COMMAND_TYPE_INSTALL_APP");
-        try {
-            java.lang.reflect.Field paramsField = Command.class.getDeclaredField("params");
-            paramsField.setAccessible(true);
-            Map<String, Object> params = new HashMap<>();
-            params.put("packageName", packageName);
-            if (versionCode != null) {
-                params.put("versionCode", versionCode);
-            }
-            paramsField.set(cmd, params);
-        } catch (Exception e) {
-            logger.warn("Could not set params on Command: {}", e.getMessage());
-        }
-        return cmd;
-    }
-
-    public static Command buildUninstallAppCommand(String packageName) {
-        Command cmd = new Command();
-        cmd.setType("COMMAND_TYPE_UNINSTALL_APP");
-        try {
-            java.lang.reflect.Field paramsField = Command.class.getDeclaredField("params");
-            paramsField.setAccessible(true);
-            Map<String, Object> params = new HashMap<>();
-            params.put("packageName", packageName);
-            paramsField.set(cmd, params);
-        } catch (Exception e) {
-            logger.warn("Could not set params on Command: {}", e.getMessage());
-        }
+        cmd.setType("LOCK");
         return cmd;
     }
 
     public static Command buildClearAppDataCommand(String packageName) {
         Command cmd = new Command();
-        cmd.setType("COMMAND_TYPE_CLEAR_APP_DATA");
-        try {
-            java.lang.reflect.Field paramsField = Command.class.getDeclaredField("params");
-            paramsField.setAccessible(true);
-            Map<String, Object> params = new HashMap<>();
-            params.put("packageName", packageName);
-            paramsField.set(cmd, params);
-        } catch (Exception e) {
-            logger.warn("Could not set params on Command: {}", e.getMessage());
-        }
+        cmd.setType("CLEAR_APP_DATA");
+        ClearAppsDataParams params = new ClearAppsDataParams();
+        params.setPackageNames(Collections.singletonList(packageName));
+        cmd.setClearAppsDataParams(params);
         return cmd;
     }
 
     public static Command buildRebootCommand() {
         Command cmd = new Command();
-        cmd.setType("COMMAND_TYPE_REBOOT");
+        cmd.setType("REBOOT");
         return cmd;
     }
 }

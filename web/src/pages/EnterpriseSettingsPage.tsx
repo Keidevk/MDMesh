@@ -24,6 +24,7 @@ export function EnterpriseSettingsPage() {
   const [form, setForm] = useState<EnterpriseConfigRequest>({
     enterpriseId: '',
     serviceAccountJson: '',
+    aesPassword: '',
     projectId: '',
     dpcPackageName: DEFAULT_DPC_PACKAGE,
     enabled: true,
@@ -44,6 +45,7 @@ export function EnterpriseSettingsPage() {
         setForm({
           enterpriseId: cfg.enterpriseId,
           serviceAccountJson: '',
+          aesPassword: '',
           projectId: cfg.projectId,
           dpcPackageName: cfg.dpcPackageName,
           enabled: cfg.enabled,
@@ -100,9 +102,24 @@ export function EnterpriseSettingsPage() {
       setError('Project ID is required');
       return false;
     }
-    if (!validateSaJson(form.serviceAccountJson)) {
+
+    const isNew = config === null;
+    const hasStoredPassword = config?.aesPasswordConfigured === true;
+    const passwordProvided = (form.aesPassword ?? '').trim().length > 0;
+    const saProvided = (form.serviceAccountJson ?? '').trim().length > 0;
+
+    if (!hasStoredPassword && !passwordProvided) {
+      setError('AES encryption password is required');
       return false;
     }
+    if (isNew && !saProvided) {
+      setSaJsonError('Service Account JSON is required');
+      return false;
+    }
+    if (saProvided && !validateSaJson(form.serviceAccountJson ?? '')) {
+      return false;
+    }
+    setSaJsonError(null);
     return true;
   }
 
@@ -113,7 +130,8 @@ export function EnterpriseSettingsPage() {
     try {
       const saved = await saveEnterpriseConfig(form);
       setConfig(saved);
-      setForm((f) => ({ ...f, serviceAccountJson: '' }));
+      setForm((f) => ({ ...f, serviceAccountJson: '', aesPassword: '' }));
+      setSaJsonError(null);
       toast.push('ok', 'Enterprise configuration saved', `Enterprise ${saved.enterpriseId} configured`);
     } catch (err) {
       setError(mapEnterpriseError(err));
@@ -132,6 +150,7 @@ export function EnterpriseSettingsPage() {
       setForm({
         enterpriseId: '',
         serviceAccountJson: '',
+        aesPassword: '',
         projectId: '',
         dpcPackageName: DEFAULT_DPC_PACKAGE,
         enabled: true,
@@ -147,7 +166,12 @@ export function EnterpriseSettingsPage() {
   function handleChange<K extends keyof EnterpriseConfigRequest>(key: K, value: EnterpriseConfigRequest[K]) {
     setForm((f) => ({ ...f, [key]: value }));
     if (key === 'serviceAccountJson') {
-      validateSaJson(String(value));
+      const json = String(value);
+      if (json.trim()) {
+        validateSaJson(json);
+      } else {
+        setSaJsonError(null);
+      }
     }
     setError(null);
   }
@@ -236,6 +260,30 @@ export function EnterpriseSettingsPage() {
         </div>
 
         <div className="set-row">
+          <span className="k">AES Encryption Password</span>
+          <span className="v">
+            <input
+              className="input"
+              type="password"
+              value={form.aesPassword ?? ''}
+              onChange={(e) => handleChange('aesPassword', e.target.value)}
+              placeholder={config?.aesPasswordConfigured ? 'Leave blank to keep the current password' : 'Set the AES encryption password'}
+              disabled={saving}
+              autoComplete="new-password"
+            />
+            <p className="note" style={{ marginTop: 8 }}>
+              Instance-wide password used to encrypt the Service Account JSON. It is stored in the database,
+              never returned by the API, and changing it re-encrypts every enterprise service account.
+            </p>
+            {!config?.aesPasswordConfigured && (
+              <p className="note" style={{ color: 'var(--err)', marginTop: 4 }}>
+                No AES encryption password is configured yet.
+              </p>
+            )}
+          </span>
+        </div>
+
+        <div className="set-row">
           <span className="k">Service Account JSON</span>
           <span className="v">
             <textarea
@@ -251,6 +299,7 @@ export function EnterpriseSettingsPage() {
             <p className="note" style={{ marginTop: 8 }}>
               Paste the full JSON key file from Google Cloud Console (IAM & Admin → Service Accounts → Keys).
               The private key is stored encrypted on the server and never returned in API responses.
+              Leave this field empty when updating to keep the currently stored JSON.
             </p>
           </span>
         </div>

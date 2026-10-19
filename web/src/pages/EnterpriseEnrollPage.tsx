@@ -14,6 +14,14 @@ import {
 
 const DEFAULT_DURATION_MS = 24 * 60 * 60 * 1000;
 
+/** Parses an AM API protobuf duration string (e.g. "86400s") into milliseconds. */
+function parseDurationMs(duration: string): number {
+  if (duration.endsWith('ms')) return parseInt(duration.slice(0, -2), 10);
+  if (duration.endsWith('s')) return Math.round(parseFloat(duration.slice(0, -1)) * 1000);
+  const n = Number(duration);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function EnterpriseEnrollPage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -33,8 +41,13 @@ export function EnterpriseEnrollPage() {
     try {
       const cfg = await getEnterpriseConfig();
       if (cfg) {
-        setConfig({ id: cfg.id, enterpriseId: cfg.enterpriseId });
-        await generateToken(cfg.id);
+        if (!cfg.enabled) {
+          setError('Enterprise configuration exists but is disabled. Please enable it in Enterprise Settings.');
+          setConfig({ id: cfg.id, enterpriseId: cfg.enterpriseId });
+        } else {
+          setConfig({ id: cfg.id, enterpriseId: cfg.enterpriseId });
+          await generateToken(cfg.id);
+        }
       } else {
         setError('Enterprise not configured. Please configure Android Enterprise first.');
       }
@@ -111,8 +124,8 @@ export function EnterpriseEnrollPage() {
   }
 
   const token = tokenData?.token;
-  const expiresAt = tokenData?.token?.duration
-    ? Date.now() + parseInt(tokenData.token.duration.replace('ms', ''))
+  const expiresAt = token?.duration
+    ? Date.now() + parseDurationMs(token.duration)
     : undefined;
 
   return (

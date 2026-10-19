@@ -720,6 +720,10 @@ public class UnsecureDAO {
         return deviceMapper.getDeviceByEnterpriseDeviceId(enterpriseDeviceId);
     }
 
+    public List<Device> getEnterpriseDevices(int customerId) {
+        return deviceMapper.getEnterpriseDevices(customerId);
+    }
+
     public Device createNewDeviceForEnterprise(String deviceId, int customerId, Integer configurationId, String enterpriseDeviceId) {
         if (configurationId == null) {
             Settings settings = getSettings(customerId);

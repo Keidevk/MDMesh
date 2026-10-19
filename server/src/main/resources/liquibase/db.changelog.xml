@@ -2865,15 +2865,15 @@
         <sql>
             CREATE TABLE android_enterprise_config (
                 id SERIAL PRIMARY KEY,
-                customer_id INT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-                enterprise_id VARCHAR(255) NOT NULL,
-                service_account_json_enc TEXT NOT NULL,
-                project_id VARCHAR(255),
-                dpc_package_name VARCHAR(255) DEFAULT 'com.mdmesh.agent',
+                customerId INT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+                enterpriseId VARCHAR(255) NOT NULL,
+                serviceAccountJsonEnc TEXT NOT NULL,
+                projectId VARCHAR(255),
+                dpcPackageName VARCHAR(255) DEFAULT 'com.mdmesh.agent',
                 enabled BOOLEAN NOT NULL DEFAULT true,
-                created_at BIGINT NOT NULL,
-                updated_at BIGINT NOT NULL,
-                UNIQUE(customer_id)
+                createdAt BIGINT NOT NULL,
+                updatedAt BIGINT NOT NULL,
+                UNIQUE(customerId)
             );
         </sql>
         <rollback>
@@ -2893,6 +2893,34 @@
             ALTER TABLE devices DROP CONSTRAINT chk_enrollment_mode;
             ALTER TABLE devices DROP COLUMN enterprise_device_id;
             ALTER TABLE devices DROP COLUMN enrollment_mode;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="26.10.02-devices-enterprise-device-id-unique" author="opencode" context="common">
+        <comment>Unique constraint (not index): devices#enterprise_device_id — an AM API device is enrolled at most once.
+             NULLs are allowed and not considered duplicates, so legacy token devices are unaffected.</comment>
+        <sql>
+            ALTER TABLE devices ADD CONSTRAINT uq_devices_enterprise_device_id UNIQUE (enterprise_device_id);
+        </sql>
+        <rollback>
+            ALTER TABLE devices DROP CONSTRAINT uq_devices_enterprise_device_id;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="26.10.19-global-settings-enterprise-aes-password" author="opencode" context="common">
+        <comment>Table,new: global_settings — instance-wide settings. enterpriseAesPassword is the password used to
+             encrypt Android Enterprise service-account JSON at rest. It is configured from the web UI and persisted
+             across schema upgrades/migrations. There is intentionally no backfill: existing ciphertexts become usable
+             again once the current password is entered in the web UI (or after re-pasting the service-account JSON).</comment>
+        <sql>
+            CREATE TABLE global_settings (
+                id INT PRIMARY KEY,
+                enterpriseAesPassword VARCHAR(255)
+            );
+            INSERT INTO global_settings (id) VALUES (1);
+        </sql>
+        <rollback>
+            DROP TABLE global_settings;
         </rollback>
     </changeSet>
 

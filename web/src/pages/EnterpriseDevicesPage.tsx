@@ -87,8 +87,8 @@ export function EnterpriseDevicesPage() {
     setError(null);
     try {
       const res = await listEnterpriseDevices();
-      setDevices(res.devices ?? []);
-      setTotal(res.totalItemsCount ?? 0);
+      setDevices(res?.devices ?? []);
+      setTotal(res?.totalItemsCount ?? 0);
     } catch (err) {
       setError(mapEnterpriseError(err));
       setDevices([]);
@@ -276,12 +276,6 @@ export function EnterpriseDevicesPage() {
           <button className="btn btn-sm" onClick={() => openCommandModal('WIPE', [...selected].map((id) => devices.find((d) => d.id === id)?.enterpriseDeviceId).filter(Boolean) as string[])}>
             Wipe
           </button>
-          <button className="btn btn-sm" onClick={() => openCommandModal('INSTALL_APP', [...selected].map((id) => devices.find((d) => d.id === id)?.enterpriseDeviceId).filter(Boolean) as string[])}>
-            Install App
-          </button>
-          <button className="btn btn-sm" onClick={() => openCommandModal('UNINSTALL_APP', [...selected].map((id) => devices.find((d) => d.id === id)?.enterpriseDeviceId).filter(Boolean) as string[])}>
-            Uninstall App
-          </button>
           <button className="btn btn-sm" onClick={() => openCommandModal('CLEAR_APP_DATA', [...selected].map((id) => devices.find((d) => d.id === id)?.enterpriseDeviceId).filter(Boolean) as string[])}>
             Clear App Data
           </button>
@@ -465,7 +459,7 @@ function EnterpriseDeviceCard({
         <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('LOCK'); }} title="Lock">🔒</button>
         <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('REBOOT'); }} title="Reboot">⟳</button>
         <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); onCommand('WIPE'); }} title="Wipe">🗑</button>
-        <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('INSTALL_APP'); }} title="Install App">⬇</button>
+        <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('CLEAR_APP_DATA'); }} title="Clear App Data">🧹</button>
         <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete">✕</button>
       </div>
     </div>
@@ -526,7 +520,7 @@ function EnterpriseDeviceRow({
         <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('LOCK'); }} title="Lock">🔒</button>
         <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('REBOOT'); }} title="Reboot">⟳</button>
         <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); onCommand('WIPE'); }} title="Wipe">🗑</button>
-        <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('INSTALL_APP'); }} title="Install App">⬇</button>
+        <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCommand('CLEAR_APP_DATA'); }} title="Clear App Data">🧹</button>
         <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onDelete(); }} title="Delete">✕</button>
       </div>
     </div>

@@ -15,6 +15,7 @@ import {
   IconMenu,
   IconSun,
   IconMoon,
+  IconEnterprise,
 } from './icons';
 
 interface NavEntry {
@@ -29,6 +30,8 @@ const NAV: NavEntry[] = [
   { to: '/configs', label: 'Configurations', Icon: IconConfig },
   { to: '/apps', label: 'Apps', Icon: IconApps },
   { to: '/enroll', label: 'Enroll', Icon: IconEnroll },
+  { to: '/enterprise/devices', label: 'Enterprise', Icon: IconEnterprise },
+  { to: '/enterprise/settings', label: 'Enterprise Settings', Icon: IconEnterprise },
   { to: '/settings', label: 'Settings', Icon: IconSettings },
 ];
 

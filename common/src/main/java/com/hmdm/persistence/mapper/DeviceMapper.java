@@ -151,6 +151,14 @@ public interface DeviceMapper {
     @Select({"SELECT * FROM devices WHERE enterprise_device_id = #{enterpriseDeviceId}"})
     Device getDeviceByEnterpriseDeviceId(@Param("enterpriseDeviceId") String enterpriseDeviceId);
 
+    @Select({"SELECT devices.*, " +
+            "  enrollment_mode AS \"enrollmentMode\", " +
+            "  enterprise_device_id AS \"enterpriseDeviceId\" " +
+            "FROM devices " +
+            "WHERE customerId = #{customerId} AND enrollment_mode = 'enterprise' " +
+            "ORDER BY number"})
+    List<Device> getEnterpriseDevices(@Param("customerId") int customerId);
+
     @Update({"UPDATE devices SET " +
             "  enrollment_mode = #{enrollmentMode}, " +
             "  enterprise_device_id = #{enterpriseDeviceId} " +

@@ -195,6 +195,16 @@ public class DeviceView {
         return device.getHardwareId();
     }
 
+    @ApiModelProperty("Full Android Management API resource name of the enterprise device (enterprises/.../devices/...)")
+    public String getEnterpriseDeviceId() {
+        return device.getEnterpriseDeviceId();
+    }
+
+    @ApiModelProperty(value = "Enrollment mode", allowableValues = "token,enterprise")
+    public String getEnrollmentMode() {
+        return device.getEnrollmentMode();
+    }
+
     @ApiModelProperty("An info on device state submitted by device to MDM server")
     public DeviceInfoView getInfo() {
         return deviceInfo;

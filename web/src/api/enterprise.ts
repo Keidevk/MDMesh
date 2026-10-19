@@ -2,7 +2,8 @@ import { apiClient, ApiError } from './client';
 
 export interface EnterpriseConfigRequest {
   enterpriseId: string;
-  serviceAccountJson: string;
+  serviceAccountJson?: string;
+  aesPassword?: string;
   projectId: string;
   dpcPackageName?: string;
   enabled?: boolean;
@@ -17,6 +18,7 @@ export interface AndroidEnterpriseConfig {
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
+  aesPasswordConfigured: boolean;
 }
 
 export interface EnterpriseEnrollmentTokenRequest {
@@ -74,27 +76,15 @@ export interface EnterpriseDeviceListView {
 export type EnterpriseCommandType =
   | 'WIPE'
   | 'LOCK'
-  | 'INSTALL_APP'
-  | 'UNINSTALL_APP'
   | 'CLEAR_APP_DATA'
   | 'REBOOT';
 
 export interface WipePayload {
+  /** When true, external storage is also erased (maps to WIPE_EXTERNAL_STORAGE). */
   userWipe: boolean;
 }
 
-export interface LockPayload {
-  lockMessage?: string;
-}
-
-export interface InstallAppPayload {
-  packageName: string;
-  versionCode?: number;
-}
-
-export interface UninstallAppPayload {
-  packageName: string;
-}
+export interface LockPayload {}
 
 export interface ClearAppDataPayload {
   packageName: string;
@@ -105,8 +95,6 @@ export interface RebootPayload {}
 export type EnterpriseCommandPayload =
   | WipePayload
   | LockPayload
-  | InstallAppPayload
-  | UninstallAppPayload
   | ClearAppDataPayload
   | RebootPayload;
 
@@ -151,6 +139,8 @@ const ENTERPRISE_ERROR_MESSAGES: Record<string, string> = {
   'error.enterprise.not.configured': 'Enterprise not configured. Please set up your Google Cloud service account first.',
   'error.enterprise.serviceaccount.required': 'Service Account JSON is required.',
   'error.enterprise.serviceaccount.invalid': 'Invalid Service Account JSON. Verify the key is correct and has Android Management API permissions.',
+  'error.enterprise.aespassword.required': 'AES encryption password is required.',
+  'error.enterprise.aespassword.invalid': 'The current AES encryption password cannot decrypt the stored Service Account JSON.',
   'error.enterprise.token.create.failed': 'Failed to create enrollment token. Check your enterprise configuration.',
   'error.enterprise.command.unsupported': 'Command type not supported.',
   'error.agent.token.invalid': 'Enrollment token is invalid or expired.',
@@ -202,8 +192,8 @@ export async function getEnterpriseQr(
   return format === 'png' ? res.blob() : res.text();
 }
 
-export async function listEnterpriseDevices(): Promise<EnterpriseDeviceListView> {
-  return apiClient.get<EnterpriseDeviceListView>('/private/agent/v1/enterprise/devices');
+export async function listEnterpriseDevices(): Promise<EnterpriseDeviceListView | null> {
+  return apiClient.get<EnterpriseDeviceListView | null>('/private/agent/v1/enterprise/devices');
 }
 
 export async function sendEnterpriseCommand(
@@ -229,10 +219,8 @@ export async function enrollEnterpriseDevice(req: EnterpriseEnrollRequest): Prom
 }
 
 export const COMMAND_TYPES: { value: EnterpriseCommandType; label: string; description: string; danger?: boolean }[] = [
-  { value: 'WIPE', label: 'Factory Reset (Wipe)', description: 'Erase all data on the device. Optionally preserve user data.', danger: true },
-  { value: 'LOCK', label: 'Lock Device', description: 'Lock the device screen with an optional message.', danger: true },
-  { value: 'INSTALL_APP', label: 'Install App', description: 'Install an application by package name and optional version code.' },
-  { value: 'UNINSTALL_APP', label: 'Uninstall App', description: 'Uninstall an application by package name.' },
+  { value: 'WIPE', label: 'Factory Reset (Wipe)', description: 'Erase all device data. Optionally also wipe external storage.', danger: true },
+  { value: 'LOCK', label: 'Lock Device', description: 'Lock the device screen.', danger: true },
   { value: 'CLEAR_APP_DATA', label: 'Clear App Data', description: 'Clear all data for an application by package name.' },
   { value: 'REBOOT', label: 'Reboot Device', description: 'Reboot the device immediately.', danger: true },
 ];
@@ -241,22 +229,13 @@ export function getCommandPayloadFields(type: EnterpriseCommandType): { key: str
   switch (type) {
     case 'WIPE':
       return [
-        { key: 'userWipe', label: 'User Wipe (preserve user data)', type: 'checkbox' },
+        { key: 'userWipe', label: 'Also wipe external storage', type: 'checkbox' },
       ];
-    case 'LOCK':
-      return [
-        { key: 'lockMessage', label: 'Lock Message (optional)', type: 'text', placeholder: 'Device locked by admin' },
-      ];
-    case 'INSTALL_APP':
-      return [
-        { key: 'packageName', label: 'Package Name', type: 'text', required: true, placeholder: 'com.example.app' },
-        { key: 'versionCode', label: 'Version Code (optional)', type: 'number', placeholder: '123' },
-      ];
-    case 'UNINSTALL_APP':
     case 'CLEAR_APP_DATA':
       return [
         { key: 'packageName', label: 'Package Name', type: 'text', required: true, placeholder: 'com.example.app' },
       ];
+    case 'LOCK':
     case 'REBOOT':
     default:
       return [];
@@ -267,13 +246,9 @@ export function buildCommandPayload(type: EnterpriseCommandType, values: Record<
   switch (type) {
     case 'WIPE':
       return { userWipe: values.userWipe === true };
-    case 'LOCK':
-      return { lockMessage: String(values.lockMessage || '') };
-    case 'INSTALL_APP':
-      return { packageName: String(values.packageName || ''), versionCode: values.versionCode ? Number(values.versionCode) : undefined };
-    case 'UNINSTALL_APP':
     case 'CLEAR_APP_DATA':
       return { packageName: String(values.packageName || '') };
+    case 'LOCK':
     case 'REBOOT':
     default:
       return {};

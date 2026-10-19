@@ -36,8 +36,12 @@ public class EnterpriseConfigRequest implements Serializable {
     @ApiModelProperty("Enterprise ID from Android Management API (e.g. enterprises/LC01abc123)")
     private String enterpriseId;
 
-    @ApiModelProperty("Service Account JSON (will be encrypted)")
+    @ApiModelProperty("Service Account JSON (will be encrypted). Optional on updates if it is already stored.")
     private String serviceAccountJson;
+
+    @ApiModelProperty("Instance-wide AES password used to encrypt the Service Account JSON. "
+            + "Leave empty on updates to keep the current password.")
+    private String aesPassword;
 
     @ApiModelProperty("Google Cloud Project ID")
     private String projectId;
@@ -65,6 +69,14 @@ public class EnterpriseConfigRequest implements Serializable {
 
     public void setServiceAccountJson(String serviceAccountJson) {
         this.serviceAccountJson = serviceAccountJson;
+    }
+
+    public String getAesPassword() {
+        return aesPassword;
+    }
+
+    public void setAesPassword(String aesPassword) {
+        this.aesPassword = aesPassword;
     }
 
     public String getProjectId() {

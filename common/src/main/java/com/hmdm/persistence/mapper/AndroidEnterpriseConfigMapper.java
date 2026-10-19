@@ -29,25 +29,36 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.SelectKey;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
+
 public interface AndroidEnterpriseConfigMapper {
 
-    @Insert({"INSERT INTO android_enterprise_config (customer_id, enterprise_id, service_account_json_enc, project_id, dpc_package_name, enabled, created_at, updated_at) " +
+    @Insert({"INSERT INTO android_enterprise_config (customerId, enterpriseId, serviceAccountJsonEnc, projectId, dpcPackageName, enabled, createdAt, updatedAt) " +
             "VALUES (#{customerId}, #{enterpriseId}, #{serviceAccountJsonEnc}, #{projectId}, #{dpcPackageName}, #{enabled}, #{createdAt}, #{updatedAt})"})
     @SelectKey(statement = "SELECT currval('android_enterprise_config_id_seq')", keyColumn = "id", keyProperty = "id",
             before = false, resultType = int.class)
     void insert(AndroidEnterpriseConfig config);
 
-    @Select({"SELECT * FROM android_enterprise_config WHERE customer_id = #{customerId}"})
+    @Select({"SELECT * FROM android_enterprise_config WHERE customerId = #{customerId}"})
     AndroidEnterpriseConfig findByCustomerId(@Param("customerId") int customerId);
 
-    @Select({"SELECT * FROM android_enterprise_config WHERE enterprise_id = #{enterpriseId}"})
+    @Select({"SELECT * FROM android_enterprise_config WHERE enterpriseId = #{enterpriseId}"})
     AndroidEnterpriseConfig findByEnterpriseId(@Param("enterpriseId") String enterpriseId);
 
-    @Update({"UPDATE android_enterprise_config SET enterprise_id = #{enterpriseId}, service_account_json_enc = #{serviceAccountJsonEnc}, " +
-            "project_id = #{projectId}, dpc_package_name = #{dpcPackageName}, enabled = #{enabled}, updated_at = #{updatedAt} " +
-            "WHERE customer_id = #{customerId}"})
+    @Select({"SELECT * FROM android_enterprise_config WHERE id = #{id}"})
+    AndroidEnterpriseConfig findById(@Param("id") int id);
+
+    @Select({"SELECT * FROM android_enterprise_config ORDER BY id LIMIT 1"})
+    AndroidEnterpriseConfig findSingleConfig();
+
+    @Select({"SELECT * FROM android_enterprise_config ORDER BY id"})
+    List<AndroidEnterpriseConfig> findAll();
+
+    @Update({"UPDATE android_enterprise_config SET enterpriseId = #{enterpriseId}, serviceAccountJsonEnc = #{serviceAccountJsonEnc}, " +
+            "projectId = #{projectId}, dpcPackageName = #{dpcPackageName}, enabled = #{enabled}, updatedAt = #{updatedAt} " +
+            "WHERE customerId = #{customerId}"})
     void update(AndroidEnterpriseConfig config);
 
-    @Delete({"DELETE FROM android_enterprise_config WHERE customer_id = #{customerId}"})
+    @Delete({"DELETE FROM android_enterprise_config WHERE customerId = #{customerId}"})
     void deleteByCustomerId(@Param("customerId") int customerId);
 }

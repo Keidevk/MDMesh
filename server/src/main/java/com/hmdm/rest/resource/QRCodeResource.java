@@ -432,8 +432,6 @@ public class QRCodeResource {
             }
 
             AndroidEnterpriseService.EnrollmentTokenResult result = enterpriseService.createEnrollmentToken(
-                    customerId.get(),
-                    configId,
                     true,
                     86400000L // 24 hours
             );
@@ -467,8 +465,20 @@ public class QRCodeResource {
         } catch (IllegalStateException e) {
             return javax.ws.rs.core.Response.status(400).entity(e.getMessage()).build();
         } catch (Exception e) {
-            logger.error("Unexpected error while generating Enterprise QR-code", e);
-            return javax.ws.rs.core.Response.serverError().build();
+            StringBuilder sb = new StringBuilder();
+            sb.append("Failed to generate Enterprise QR-code");
+            sb.append(": ").append(e.getClass().getSimpleName()).append(" - ").append(e.getMessage());
+            Throwable cause = e.getCause();
+            if (cause != null && cause != e) {
+                sb.append("; caused by: ").append(cause.getClass().getSimpleName()).append(" - ").append(cause.getMessage());
+            }
+            Throwable root = cause;
+            while (root != null && root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
+                sb.append("; root cause: ").append(root.getClass().getSimpleName()).append(" - ").append(root.getMessage());
+            }
+            logger.error(sb.toString(), e);
+            return javax.ws.rs.core.Response.status(400).entity(sb.toString()).build();
         }
     }
 

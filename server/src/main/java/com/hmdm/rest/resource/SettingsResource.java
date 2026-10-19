@@ -37,6 +37,7 @@ import com.hmdm.persistence.UnsecureDAO;
 import com.hmdm.persistence.UserRoleSettingsDAO;
 import com.hmdm.persistence.domain.UserRoleSettings;
 import com.hmdm.persistence.AndroidEnterpriseConfigDAO;
+import com.hmdm.persistence.GlobalSettingsDAO;
 import com.hmdm.persistence.domain.AndroidEnterpriseConfig;
 import com.hmdm.security.SecurityContext;
 import com.hmdm.service.AndroidEnterpriseService;
@@ -47,6 +48,7 @@ import com.hmdm.persistence.CommonDAO;
 import com.hmdm.persistence.domain.Settings;
 import com.hmdm.rest.json.Response;
 import com.hmdm.rest.json.EnterpriseConfigRequest;
+import com.hmdm.rest.json.EnterpriseConfigResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,6 +67,7 @@ public class SettingsResource {
     private UnsecureDAO unsecureDAO;
     private AndroidEnterpriseConfigDAO enterpriseConfigDAO;
     private AndroidEnterpriseService enterpriseService;
+    private GlobalSettingsDAO globalSettingsDAO;
 
     /**
      * <p>A constructor required by Swagger.</p>
@@ -74,12 +77,14 @@ public class SettingsResource {
 
     @Inject
     public SettingsResource(CommonDAO commonDAO, UserRoleSettingsDAO userRoleSettingsDAO, UnsecureDAO unsecureDAO,
-                            AndroidEnterpriseConfigDAO enterpriseConfigDAO, AndroidEnterpriseService enterpriseService) {
+                            AndroidEnterpriseConfigDAO enterpriseConfigDAO, AndroidEnterpriseService enterpriseService,
+                            GlobalSettingsDAO globalSettingsDAO) {
         this.commonDAO = commonDAO;
         this.userRoleSettingsDAO = userRoleSettingsDAO;
         this.unsecureDAO = unsecureDAO;
         this.enterpriseConfigDAO = enterpriseConfigDAO;
         this.enterpriseService = enterpriseService;
+        this.globalSettingsDAO = globalSettingsDAO;
     }
 
     // =================================================================================================================
@@ -262,9 +267,7 @@ public class SettingsResource {
             if (config == null) {
                 return Response.OK(null);
             }
-            // Don't return encrypted SA JSON
-            config.setServiceAccountJsonEnc(null);
-            return Response.OK(config);
+            return Response.OK(toResponse(config));
         } catch (Exception e) {
             log.error("Unexpected error when getting enterprise config", e);
             return Response.INTERNAL_ERROR();
@@ -291,14 +294,58 @@ public class SettingsResource {
         }
 
         try {
-            // Validate Service Account JSON
-            if (request.getServiceAccountJson() == null || request.getServiceAccountJson().trim().isEmpty()) {
-                return Response.ERROR("error.enterprise.serviceaccount.required");
+            String requestedPassword = isBlank(request.getAesPassword()) ? null : request.getAesPassword();
+            String currentPassword = globalSettingsDAO.getEnterpriseAesPassword();
+            if (isBlank(currentPassword)) {
+                currentPassword = null;
             }
-            enterpriseService.validateServiceAccountJson(request.getServiceAccountJson());
+            String effectivePassword = requestedPassword != null ? requestedPassword : currentPassword;
+
+            if (effectivePassword == null) {
+                return Response.ERROR("error.enterprise.aespassword.required");
+            }
+
+            String serviceAccountJson = request.getServiceAccountJson();
+            boolean serviceAccountProvided = !isBlank(serviceAccountJson);
+            if (serviceAccountProvided) {
+                enterpriseService.validateServiceAccountJson(serviceAccountJson);
+            }
 
             AndroidEnterpriseConfig config = enterpriseConfigDAO.findByCustomerId(customerId.get());
             boolean isNew = config == null;
+            if (isNew && !serviceAccountProvided) {
+                return Response.ERROR("error.enterprise.serviceaccount.required");
+            }
+
+            boolean passwordChanged = requestedPassword != null && !requestedPassword.equals(currentPassword);
+            if (passwordChanged) {
+                if (currentPassword == null && serviceAccountProvided) {
+                    // The administrator is re-pasting the service account JSON, so there is no
+                    // need to decrypt the existing ciphertext: the new value will replace it.
+                    enterpriseService.setGlobalAesPassword(requestedPassword);
+                } else {
+                    try {
+                        // This also verifies a first-time password against the existing ciphertext.
+                        enterpriseService.changeGlobalAesPassword(currentPassword, requestedPassword);
+                    } catch (RuntimeException ex) {
+                        if (!serviceAccountProvided) {
+                            throw ex;
+                        }
+                        // Existing ciphertexts cannot be decrypted with the stored password.
+                        // The administrator supplied a fresh service account JSON for this config,
+                        // so reset the global password and let the new value replace the old one.
+                        log.warn("Could not re-encrypt existing enterprise configs; resetting the AES password "
+                                + "and replacing the current service account JSON", ex);
+                        enterpriseService.setGlobalAesPassword(requestedPassword);
+                    }
+                }
+                config = enterpriseConfigDAO.findByCustomerId(customerId.get());
+                isNew = config == null;
+                if (isNew && !serviceAccountProvided) {
+                    return Response.ERROR("error.enterprise.serviceaccount.required");
+                }
+            }
+
             if (isNew) {
                 config = new AndroidEnterpriseConfig();
                 config.setCustomerId(customerId.get());
@@ -309,10 +356,10 @@ public class SettingsResource {
             config.setDpcPackageName(request.getDpcPackageName() != null ? request.getDpcPackageName() : "com.mdmesh.agent");
             config.setEnabled(request.isEnabled());
 
-            // Encrypt Service Account JSON
-            String encrypted = com.hmdm.util.CryptoUtil.encryptAES(request.getServiceAccountJson(),
-                    "headwind-mdm-enterprise-aes-key-2024");
-            config.setServiceAccountJsonEnc(encrypted);
+            if (serviceAccountProvided) {
+                config.setServiceAccountJsonEnc(
+                        enterpriseService.encryptServiceAccount(serviceAccountJson, effectivePassword));
+            }
 
             if (isNew) {
                 config.setCreatedAt(System.currentTimeMillis());
@@ -323,12 +370,13 @@ public class SettingsResource {
                 enterpriseConfigDAO.update(config);
             }
 
-            // Don't return encrypted SA JSON
-            config.setServiceAccountJsonEnc(null);
-            return Response.OK(config);
+            return Response.OK(toResponse(config));
         } catch (RuntimeException e) {
             if (e.getMessage() != null && e.getMessage().contains("Invalid Service Account")) {
                 return Response.ERROR("error.enterprise.serviceaccount.invalid");
+            }
+            if (e.getMessage() != null && e.getMessage().contains("AES decryption failed")) {
+                return Response.ERROR("error.enterprise.aespassword.invalid");
             }
             log.error("Unexpected error when saving enterprise config", e);
             return Response.INTERNAL_ERROR();
@@ -336,6 +384,24 @@ public class SettingsResource {
             log.error("Unexpected error when saving enterprise config", e);
             return Response.INTERNAL_ERROR();
         }
+    }
+
+    private EnterpriseConfigResponse toResponse(AndroidEnterpriseConfig config) {
+        EnterpriseConfigResponse response = new EnterpriseConfigResponse();
+        response.setId(config.getId());
+        response.setCustomerId(config.getCustomerId());
+        response.setEnterpriseId(config.getEnterpriseId());
+        response.setProjectId(config.getProjectId());
+        response.setDpcPackageName(config.getDpcPackageName());
+        response.setEnabled(config.isEnabled());
+        response.setCreatedAt(config.getCreatedAt());
+        response.setUpdatedAt(config.getUpdatedAt());
+        response.setAesPasswordConfigured(enterpriseService.isAesPasswordConfigured());
+        return response;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     @ApiOperation(

@@ -113,3 +113,12 @@ export const IconMoon = (p: P) => (
     <path d="M13.5 9.2A5.5 5.5 0 0 1 6.8 2.5 5.5 5.5 0 1 0 13.5 9.2Z" />
   </Svg>
 );
+
+export const IconEnterprise = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Z" />
+    <path d="M8 5.5v5" />
+    <path d="M5.5 8h5" />
+    <path d="M8 11.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z" />
+  </Svg>
+);
