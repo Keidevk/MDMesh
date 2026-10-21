@@ -341,7 +341,8 @@ object AgentModule {
         kiosk: KioskApplier,
         location: LocationModeStore,
         store: ConfigStateStore,
-    ): ConfigApplier = ConfigApplier(toggles, kiosk, location::set, store)
+        registry: CapabilityRegistry,
+    ): ConfigApplier = ConfigApplier(toggles, kiosk, location::set, store, registry.factoryResetProtection())
 
     @Provides
     @IntoSet

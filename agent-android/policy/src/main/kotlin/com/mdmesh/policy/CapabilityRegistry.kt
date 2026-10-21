@@ -6,6 +6,8 @@ import com.mdmesh.policy.camera.CameraPolicy
 import com.mdmesh.policy.camera.CameraPolicyFactory
 import com.mdmesh.policy.factoryreset.FactoryResetPolicy
 import com.mdmesh.policy.factoryreset.FactoryResetPolicyFactory
+import com.mdmesh.policy.factoryresetprotection.FactoryResetProtectionPolicy
+import com.mdmesh.policy.factoryresetprotection.FactoryResetProtectionPolicyFactory
 import com.mdmesh.policy.safeboot.SafeBootPolicy
 import com.mdmesh.policy.safeboot.SafeBootPolicyFactory
 import com.mdmesh.policy.screenshots.ScreenshotsPolicy
@@ -65,11 +67,22 @@ class CapabilityRegistry(
     }
 
     /**
+     * The structured (non-toggle) [FactoryResetProtectionPolicy] on this device, or `null` when no
+     * strategy is supported (API below 30 or not Device Owner). EFRP carries an account allow-list
+     * in addition to the on/off flag, so it is not part of [togglePolicies]; `config.apply` reaches
+     * it through this probe. See `proto/registry.md` § policy.
+     */
+    fun factoryResetProtection(): FactoryResetProtectionPolicy? =
+        FactoryResetProtectionPolicyFactory.create(handle)
+
+    /**
      * The set of policy keys with a working strategy on this device — derived from the
      * registered strategies, so it can never drift from what can actually be applied.
-     * Each entry corresponds to a row in `proto/registry.md` § policy.
+     * Each entry corresponds to a row in `proto/registry.md` § policy. It is the union of the
+     * toggle policies and the structured ones (currently only `factoryResetProtection`).
      */
-    fun supportedPolicyKeys(): List<String> = togglePolicies().keys.toList()
+    fun supportedPolicyKeys(): List<String> =
+        togglePolicies().keys.toList() + listOfNotNull(factoryResetProtection()?.capabilityKey)
 
     /** Convenience: resolve the live [DeviceControl] facade for this device. */
     fun deviceControl(): DeviceControl? {
