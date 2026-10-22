@@ -8,6 +8,13 @@ line under Unreleased.
 
 ## Unreleased
 
+Fixes
+- Kiosk: Safe Mode is blocked whenever a device is in kiosk, including kiosks started with Enter kiosk on the device
+  page, unless the configuration's Safe Mode setting is Allow. The block is lifted once nothing asks for it: when such
+  a kiosk ends, or when kiosk is turned off on the configuration, unless the setting is Block. Needs agent 0.3.7.
+- Kiosk: an exit PIN that can't be checked right now says so ("Exit unavailable right now") instead of closing.
+- The console's kiosk help says which behaviour needs agent 0.3.6 or later.
+
 ## v0.3.6 — 2026-10-21
 
 Upgrading
