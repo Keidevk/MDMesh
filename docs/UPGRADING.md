@@ -140,6 +140,24 @@ available).
 
 ## Version notes
 
+### v0.3.6
+
+A security release for kiosk devices. Update every server, then roll out agent 0.3.6 from **Settings → Agent
+rollout**, to one device first.
+
+- **Exit PIN:** with agent 0.3.6, a kiosk configuration without an exit PIN has no exit on the device; kiosk then ends
+  only from the console. Set an exit PIN on the configuration before the rollout if people need to leave kiosk on the
+  device.
+- **Wrong PINs:** 3 wrong exit PINs lock the exit for 30 seconds, and each further wrong PIN locks it for longer, up to
+  an hour. A restart doesn't end a lockout. Administrators who can manage the device get an email, if SMTP is set up
+  ([Kiosk alerts](OPERATIONS.md#server)).
+- **Safe Mode:** kiosk configurations whose Safe Mode setting is **Not managed** now block Safe Mode. Kiosk devices
+  re-apply their configuration once after the server update. To allow Safe Mode, set it to **Allow**.
+- **A kiosk app that keeps stopping** leaves the device in kiosk on an "App closed" screen with an **Open again**
+  button. Before, kiosk ended.
+- **Apps page:** saving app assignments no longer changes other configurations' settings. With `LEGACY_DEVICE_API=1`,
+  removing a Headwind content app no longer turns kiosk off.
+
 ### v0.3.4
 
 Update the server, then roll out agent 0.3.4 from **Settings → Agent rollout**. Then check location reporting and

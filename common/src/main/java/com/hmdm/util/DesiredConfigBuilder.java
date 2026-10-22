@@ -79,8 +79,18 @@ public final class DesiredConfigBuilder {
         putIfManaged(p, "usbStorage", cfg.getUsbStorage());
         putIfManaged(p, "screenshots", cfg.getDisableScreenshots() == null ? null : !cfg.getDisableScreenshots());
         putIfManaged(p, "factoryReset", cfg.getDisableFactoryReset() == null ? null : !cfg.getDisableFactoryReset());
-        putIfManaged(p, "safeBoot", cfg.getDisableSafeBoot() == null ? null : !cfg.getDisableSafeBoot());
+        putIfManaged(p, "safeBoot", safeBootAllowed(cfg));
         return p;
+    }
+
+    /**
+     * Safe Mode starts the phone's own launcher and gets around kiosk, so a kiosk configuration that leaves it
+     * unmanaged blocks it. An explicit setting wins either way; when kiosk ends the key is unmanaged again and the agent
+     * lifts the block.
+     */
+    private static Boolean safeBootAllowed(Configuration cfg) {
+        if (cfg.getDisableSafeBoot() != null) return !cfg.getDisableSafeBoot();
+        return cfg.isKioskMode() ? Boolean.FALSE : null;
     }
 
     private static void putIfManaged(Map<String, Boolean> p, String key, Boolean v) {
@@ -117,7 +127,13 @@ public final class DesiredConfigBuilder {
         k.setAllowedPackages(allowed);
         k.setPinPackage(mainPkg);
         DesiredKioskFeatures f = new DesiredKioskFeatures();
-        f.setHome(cfg.getKioskHome()); f.setRecents(cfg.getKioskRecents()); f.setNotifications(cfg.getKioskNotifications());
+        // Android refuses Recents or Notifications in kiosk without Home, and the agent's whole kiosk entry fails (older
+        // agents then never enter kiosk). Without Home they are dropped, never Home turned on. Only a true is dropped,
+        // so other configurations keep their revision.
+        boolean home = Boolean.TRUE.equals(cfg.getKioskHome());
+        f.setHome(cfg.getKioskHome());
+        f.setRecents(home || !Boolean.TRUE.equals(cfg.getKioskRecents()) ? cfg.getKioskRecents() : null);
+        f.setNotifications(home || !Boolean.TRUE.equals(cfg.getKioskNotifications()) ? cfg.getKioskNotifications() : null);
         f.setSystemInfo(cfg.getKioskSystemInfo()); f.setKeyguard(cfg.getKioskKeyguard()); f.setLockButtons(cfg.getKioskLockButtons());
         // Its own column, not lockButtons: DISALLOW_ADJUST_VOLUME mutes the device, so existing lockButtons=true
         // kiosks must not start muting on upgrade. Null (all existing rows) is dropped from the canonical JSON.

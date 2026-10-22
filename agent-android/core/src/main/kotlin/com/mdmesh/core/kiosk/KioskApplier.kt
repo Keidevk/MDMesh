@@ -37,16 +37,10 @@ class KioskApplier(
 
     private suspend fun enterLocked(p: KioskApplyPayload): KioskResult {
         // Already in this kiosk: no re-entry or relaunch, but re-assert the volume lock (it may have failed before).
-        if (store.load() == p && isLockTaskActive()) return applyVolume(p, KioskResult.Ok)
-        val features = lockTaskFeatures(
-            KioskToggles(
-                home = p.features.home, recents = p.features.recents, notifications = p.features.notifications,
-                systemInfo = p.features.systemInfo, keyguard = p.features.keyguard, lockButtons = p.features.lockButtons,
-            ),
-        )
-        val allowed = (p.allowedPackages + listOfNotNull(p.pinPackage)).distinct()
+        val current = store.load()
+        if (current == p && isLockTaskActive()) return applyVolume(p, KioskResult.Ok)
         home.setClaimEnabled(true)
-        return when (val r = kiosk.enter(homeComponent, allowed, features)) {
+        return when (val r = lockTo(p)) {
             KioskResult.Ok -> {
                 // The device IS in kiosk now, so the state says so even if the volume lock fails below: a failed
                 // volume lock is reported (the config document is then not persisted and is re-applied), and the
@@ -55,8 +49,28 @@ class KioskApplier(
                 home.showLauncher()
                 applyVolume(p, r)
             }
-            else -> { home.setClaimEnabled(false); r } // never leave a non-kiosk device claiming HOME
+            else -> {
+                if (current == null) {
+                    home.setClaimEnabled(false) // never leave a non-kiosk device claiming HOME
+                } else {
+                    // A device in kiosk stays in it: the failed entry may already have replaced the allowlist, so
+                    // put back the kiosk it had, and keep HOME, or a restart would boot to the phone's own launcher.
+                    lockTo(current)
+                }
+                r
+            }
         }
+    }
+
+    private fun lockTo(p: KioskApplyPayload): KioskResult {
+        val features = lockTaskFeatures(
+            KioskToggles(
+                home = p.features.home, recents = p.features.recents, notifications = p.features.notifications,
+                systemInfo = p.features.systemInfo, keyguard = p.features.keyguard, lockButtons = p.features.lockButtons,
+            ),
+        )
+        val allowed = (p.allowedPackages + listOfNotNull(p.pinPackage)).distinct()
+        return kiosk.enter(homeComponent, allowed, features)
     }
 
     /** Volume is its own opt-in (it mutes the device); anything else releases a lock set earlier. */
@@ -67,12 +81,11 @@ class KioskApplier(
         }
 
     /**
-     * THE kiosk exit. Every path goes through here (`kiosk.exit`, `config.apply` kiosk-off, the on-device admin-PIN
-     * exit and the crash-loop bail-out), so the volume lock, which survives reboots and mutes the device, is always
-     * released with it.
+     * THE kiosk exit. Every path goes through here (`kiosk.exit`, `config.apply` kiosk-off and the on-device
+     * admin-PIN exit), so the volume lock, which survives reboots and mutes the device, is always released with it.
+     * A crash loop never exits: the launcher holds in kiosk instead (KioskLauncherActivity).
      *
-     * @param handBackHome release the HOME claim and show the OEM launcher (false: the agent stays HOME, e.g. to
-     *   show its recovery screen after a crash loop).
+     * @param handBackHome release the HOME claim and show the OEM launcher (false: the agent stays HOME).
      * @param force clear local state and the volume lock even when the controller could not exit (on-device exits:
      *   the user must get out).
      */

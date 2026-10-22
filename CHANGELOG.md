@@ -8,6 +8,27 @@ line under Unreleased.
 
 ## Unreleased
 
+Heads-up
+- Kiosk: a kiosk without an exit PIN has no exit on the device; end it from the console. Set an exit PIN on the
+  configuration to keep the on-device exit. Needs agent 0.3.6.
+- Legacy device API (`LEGACY_DEVICE_API=1`): removing a Headwind content app from a configuration on the Apps page no
+  longer turns kiosk mode off by itself. Turn kiosk off on the configuration page if you want it off.
+
+Fixes
+- Kiosk: a kiosk app that keeps stopping no longer ends kiosk. The device stays in kiosk on an "App closed" screen with
+  an "Open again" button, until kiosk is ended with the exit PIN or from the console. Needs agent 0.3.6.
+- Kiosk: a kiosk change that fails on a device already in kiosk leaves the device in the kiosk it had. Needs agent
+  0.3.6.
+- Kiosk: Recents and Notifications stay off while Home is off, as Android requires. Before, kiosk didn't start with
+  that combination.
+- Kiosk: too many wrong exit PINs lock the exit for a while, and administrators get an email (needs SMTP). Needs
+  agent 0.3.6.
+- Kiosk: Safe Mode is blocked on kiosk devices unless the configuration's Safe Mode setting says Allow.
+- Saving app assignments on the Apps page no longer changes other configurations' settings, and devices pick up the
+  change right away.
+- A device whose agent stopped while applying its configuration (Android ended the app, the phone restarted, the
+  agent updated) gets the configuration again on its next check-in. Before, newer changes could wait up to 6 hours.
+
 ## v0.3.5 — 2026-10-21
 
 Upgrading

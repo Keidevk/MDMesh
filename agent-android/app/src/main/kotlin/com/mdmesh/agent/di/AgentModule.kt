@@ -3,6 +3,7 @@ package com.mdmesh.agent.di
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.os.SystemClock
 import com.mdmesh.agent.BuildConfig
 import com.mdmesh.agent.admin.AdminReceiver
 import com.mdmesh.core.capability.CapabilityCollector
@@ -59,10 +60,13 @@ import com.mdmesh.core.telemetry.TelemetrySource
 import com.mdmesh.proto.AppManagement
 import com.mdmesh.proto.DeviceAction
 import com.mdmesh.kiosk.CrashLoopGuard
+import com.mdmesh.kiosk.ExitPinGate
 import com.mdmesh.kiosk.FaultStore
 import com.mdmesh.kiosk.KioskController
 import com.mdmesh.kiosk.LockTaskKioskController
+import com.mdmesh.kiosk.PinAttemptStore
 import com.mdmesh.kiosk.SharedPrefsFaultStore
+import com.mdmesh.kiosk.SharedPrefsPinAttemptStore
 import com.mdmesh.oem.GenericOemAdapter
 import com.mdmesh.oem.KnoxAdapter
 import com.mdmesh.oem.OemAdapter
@@ -215,6 +219,17 @@ object AgentModule {
     @Provides
     @Singleton
     fun provideCrashLoopGuard(store: FaultStore): CrashLoopGuard = CrashLoopGuard(store)
+
+    @Provides
+    @Singleton
+    fun providePinAttemptStore(@ApplicationContext context: Context): PinAttemptStore =
+        SharedPrefsPinAttemptStore(context)
+
+    @Provides
+    @Singleton
+    fun provideExitPinGate(store: PinAttemptStore): ExitPinGate =
+        // Uptime, not wall time: it can't be set, so changing the clock can't shorten a lockout.
+        ExitPinGate(store) { SystemClock.elapsedRealtime() }
 
     // --- App-management + kiosk + device command handlers (multibound) ---
 

@@ -102,10 +102,10 @@ export const CONFIG_FIELDS: FieldDef[] = [
   // ── Kiosk ─────────────────────────────────────────────────────────────────
   { key: 'kioskMode', label: 'Kiosk mode', type: 'switch', group: 'Kiosk', enforced: true, help: 'Lock the device to the main app, or to the apps shown in kiosk.' },
   { key: 'kioskExit', label: 'Kiosk exit', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, flagLabels: ['Hidden gesture', 'Visible button'], help: 'How to reach the exit PIN prompt: 7 taps in the top-right corner, or a visible exit button.' },
-  { key: 'password', label: 'Kiosk exit PIN', type: 'password', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Asked for when someone leaves kiosk mode on the device. Stored as entered.' },
+  { key: 'password', label: 'Kiosk exit PIN', type: 'password', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Asked for when someone leaves kiosk mode on the device. Leave it empty and the device has no exit: end kiosk from the console. After 3 wrong PINs the exit locks for 30 s, then for longer after each wrong PIN, and administrators get an email. Stored as entered.' },
   { key: 'kioskHome', label: 'Home button', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Allow the Home button in kiosk.' },
-  { key: 'kioskRecents', label: 'Recents button', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Allow the Recent-apps button in kiosk.' },
-  { key: 'kioskNotifications', label: 'Notifications', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Allow the notification shade in kiosk.' },
+  { key: 'kioskRecents', label: 'Recents button', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Allow the Recent-apps button in kiosk. Needs Home button on (Android requires it).' },
+  { key: 'kioskNotifications', label: 'Notifications', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Allow the notification shade in kiosk. Needs Home button on (Android requires it).' },
   { key: 'kioskSystemInfo', label: 'System info', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Show the status bar (time, battery, signal) in kiosk.' },
   { key: 'kioskKeyguard', label: 'Lock screen', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: 'Allow the lock screen in kiosk.' },
   { key: 'kioskLockButtons', label: 'Lock hardware buttons', type: 'flag', group: 'Kiosk', enforced: true, kioskOnly: true, help: LOCK_BUTTONS_HELP },
@@ -133,7 +133,7 @@ export const CONFIG_FIELDS: FieldDef[] = [
   { key: 'mobileEnrollment', label: 'Enroll over mobile data', type: 'switch', group: 'Network', help: "Read only by Headwind's server QR. The MDMesh enrollment QR ignores it." },
 
   // ── Restrictions ──────────────────────────────────────────────────────────
-  { key: 'disableSafeBoot', label: 'Safe Mode', type: 'tri', group: 'Restrictions', enforced: true, segments: ALLOW_BLOCK_INVERTED, help: 'Block prevents rebooting into Safe Mode, which would bypass the kiosk.' },
+  { key: 'disableSafeBoot', label: 'Safe Mode', type: 'tri', group: 'Restrictions', enforced: true, segments: ALLOW_BLOCK_INVERTED, help: 'Block prevents rebooting into Safe Mode, which would bypass the kiosk. In kiosk, Not managed blocks it too (from server 0.3.6); choose Allow to permit it.' },
   { key: 'disableFactoryReset', label: 'Factory reset', type: 'tri', group: 'Restrictions', enforced: true, segments: ALLOW_BLOCK_INVERTED, help: 'Block prevents a factory reset from Settings.' },
   { key: 'disableScreenshots', label: 'Screenshots', type: 'tri', group: 'Restrictions', enforced: true, segments: ALLOW_BLOCK_INVERTED, help: 'Block prevents screenshots and screen recording.' },
   { key: 'usbStorage', label: 'USB storage', type: 'tri', group: 'Restrictions', enforced: true, segments: ALLOW_BLOCK, help: 'Block stops USB file transfer and mounting external storage.' },

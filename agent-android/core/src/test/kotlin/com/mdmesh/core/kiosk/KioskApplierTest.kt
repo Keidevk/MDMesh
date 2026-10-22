@@ -16,14 +16,20 @@ import org.junit.Test
 
 class KioskApplierTest {
     private class FakeController(
-        private val enterResult: KioskResult,
+        private var enterResult: KioskResult,
         private val exitResult: KioskResult = KioskResult.Ok,
         var volumeResult: KioskResult = KioskResult.Ok,
     ) : KioskController {
         var entered: List<String>? = null; var exited = false
+        /** Every enter call's allowlist, in order; [failFor] makes an enter with that allowlist fail. */
+        val enters = mutableListOf<List<String>>()
+        var failFor: List<String>? = null
         /** Every setVolumeLocked call, in order. */
         val volume = mutableListOf<Boolean>()
-        override fun enter(homeComponent: ComponentName, allowedPackages: List<String>, features: Int): KioskResult { entered = allowedPackages; return enterResult }
+        override fun enter(homeComponent: ComponentName, allowedPackages: List<String>, features: Int): KioskResult {
+            entered = allowedPackages; enters += allowedPackages
+            return if (allowedPackages == failFor) KioskResult.Failed("dpm") else enterResult
+        }
         override fun exit(): KioskResult { exited = true; return exitResult }
         override fun setVolumeLocked(locked: Boolean): KioskResult { volume += locked; return volumeResult }
         override fun isLocked(context: android.content.Context): Boolean = false
@@ -53,6 +59,17 @@ class KioskApplierTest {
         assertEquals(KioskResult.Unsupported, r)
         assertNull(store.load())
         assertEquals(listOf("claim:true", "claim:false"), h.log)
+    }
+    @Test fun `a failed entry on a device in kiosk keeps it in kiosk with the kiosk it had`() = runTest {
+        val p = KioskApplyPayload(mode = "single", pinPackage = "com.a", allowedPackages = listOf("com.a"))
+        val c = FakeController(KioskResult.Ok); val h = FakeHome(); val store = InMemoryKioskStateStore(); store.save(p)
+        c.failFor = listOf("com.b")
+        val r = KioskApplier(c, store, h, home) { true }
+            .enter(KioskApplyPayload(mode = "single", pinPackage = "com.b", allowedPackages = listOf("com.b")))
+        assertEquals(KioskResult.Failed("dpm"), r)
+        assertEquals("the old kiosk is put back", listOf(listOf("com.b"), listOf("com.a")), c.enters)
+        assertEquals(p, store.load())
+        assertFalse("HOME stays claimed, so a restart comes back to kiosk", "claim:false" in h.log)
     }
     @Test fun `re-entering with the same payload while locked is a no-op`() = runTest {
         val p = KioskApplyPayload(mode = "single", pinPackage = "com.a", allowedPackages = listOf("com.a"))
@@ -122,7 +139,7 @@ class KioskApplierTest {
         assertEquals(listOf("claim:false", "oem"), h.log)
     }
 
-    @Test fun `crash-loop bail-out exit releases volume but keeps the agent as HOME`() = runTest {
+    @Test fun `an exit that keeps the agent as HOME still releases volume`() = runTest {
         val c = FakeController(KioskResult.Ok); val h = FakeHome()
         val store = InMemoryKioskStateStore()
         store.save(KioskApplyPayload(features = KioskFeaturesDto(lockVolume = true)))
@@ -130,7 +147,7 @@ class KioskApplierTest {
         assertTrue(c.exited)
         assertEquals(listOf(false), c.volume)
         assertNull(store.load())
-        assertTrue("recovery screen stays HOME", h.log.isEmpty())
+        assertTrue("the agent stays HOME", h.log.isEmpty())
     }
 
     @Test fun `a non-forced failed exit leaves state and volume alone`() = runTest {

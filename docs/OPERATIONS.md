@@ -26,10 +26,15 @@ run: only `GITHUB_REPO` and `GITHUB_TOKEN` survive a hand edit there (a hand-edi
 | `SERVER_JAVA_OPTS` | `.env` (native: `JAVA_OPTS` in a `systemctl edit mdmesh-server` drop-in) | empty | Extra JVM flags, e.g. `-Xmx1g`. |
 | `LEGACY_DEVICE_API` | `.env`; native env → `ROOT.xml` | `0` | `1` re-enables the Headwind launcher's device routes. |
 | `SECURE_ENROLLMENT` | `.env`; native: always `0` | `0` | Legacy Headwind setting. Leave it at `0`: `1` blocks agent downloads. |
-| `SMTP_HOST`, `SMTP_PORT` | `.env`; native env → `ROOT.xml` | empty, `25` | Mail server for password recovery. Empty host: no email. |
+| `SMTP_HOST`, `SMTP_PORT` | `.env`; native env → `ROOT.xml` | empty, `25` | Mail server for password recovery and kiosk alerts. Empty host: no email. |
 | `SMTP_FROM` | same | `mdm@<hostname>` (Docker), `mdm@localhost` (native) | Sender address. |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | same | empty | Mail login. |
 | `SMTP_SSL`, `SMTP_STARTTLS` | same | `false` | `SMTP_SSL=true` for port 465, `SMTP_STARTTLS=true` for 587. |
+
+**Kiosk alerts.** When too many wrong exit PINs lock a device's kiosk exit (agent 0.3.6 or later), the server emails
+the users of that device's customer who have an email address, may edit devices (or are super-admins) and can see the
+device (all devices, or one of its device groups). At most one alert per device, and ten per customer, per hour.
+This needs `SMTP_HOST`; without it the lockout only shows in the device's events.
 
 The wizard writes `SITE_ADDRESS`, `ACME_EMAIL` and `TUNNEL_TOKEN` for the hosting mode you choose.
 

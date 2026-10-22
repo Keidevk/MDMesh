@@ -142,7 +142,6 @@ public class ConfigurationDAO extends AbstractLinkedDAO<Configuration, Applicati
                     // #6159: When updating the configuration via configuration editor page the state of Kiosk Mode flag
                     // is specified explicitly by the submitted form value, so there is no need to re-check the state of
                     // that flag based on presence of content app in configuration
-//                    this.applicationMapper.recheckConfigurationKioskModes(configuration.getCustomerId());
 
                     // A list the request leaves out (null) keeps what is stored; an empty list clears it. A client that
                     // sends a configuration without its files or app settings must not delete them.

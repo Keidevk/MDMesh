@@ -4,6 +4,7 @@ import { listApplications, appCategory, type Application } from '../api/applicat
 import { getConfiguration, type Configuration } from '../api/configurations';
 import { queueCommand } from '../api/commands';
 import { useToast } from '../ui/toast';
+import { CONFIG_FIELDS } from '../data/configFields';
 
 type Device = { number: string; configurationId?: number; description?: string };
 type Mode = 'launcher' | 'single';
@@ -59,6 +60,9 @@ interface PickItem {
   system: boolean;
   badge?: string;
 }
+
+/** The configuration's own help for the exit PIN, so the modals say the same: an empty PIN means no exit on the device. */
+export const EXIT_PIN_HELP = CONFIG_FIELDS.find((f) => f.key === 'password')?.help;
 
 const iconKey = (pkg: string, v?: number) => `mdm.icon.${pkg}@${v ?? 0}`;
 function cachedIcon(pkg: string, v?: number): string | undefined {
@@ -340,8 +344,9 @@ export function KioskEnterModal({
             </select>
           </label>
           <label className="field">
-            <span>Exit password</span>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="optional" />
+            <span>Kiosk exit PIN</span>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                   placeholder="Empty: no exit on the device" title={EXIT_PIN_HELP} />
           </label>
         </div>
 
