@@ -265,6 +265,82 @@ PGPASSWORD="$(setpriv --reuid=mdmesh --regid=mdmesh --init-groups \
 The installer and uninstaller print this command next to each dump they write. To restore an uninstall dump, install
 again first.
 
+## Removing a customer
+
+A single-customer install has no super-admin, so the console can't delete a customer. To remove one, for example one
+the self-signup API made before 0.3.8 ([Upgrading](UPGRADING.md#customers-you-didnt-create)), follow these steps
+once per customer. The SQL deletes the customer with its users, devices, configurations, applications, groups,
+uploaded-file records, settings and plugin data, and the agent data of its devices. It runs in one transaction, so if
+any statement fails, nothing changes. It refuses customer 1. It keeps the customer's rows in `plugin_audit_log`, a
+record of what the account did that nothing else reads.
+
+1. Dump the database ([Backups and restore](#backups-and-restore)). Then, in the install directory (Docker) or as
+   root (native), set up the `psql` command, which runs as the `mdmesh` role:
+
+   ```bash
+   PSQL=(docker compose exec -T postgres psql -X -U mdmesh -d mdmesh)              # Docker
+   export PGPASSWORD="$(setpriv --reuid=mdmesh --regid=mdmesh --init-groups \
+     sed -n 's/.*name="JDBC.password" value="\([^"]*\)".*/\1/p' \
+     /opt/mdmesh-tc/conf/Catalina/localhost/ROOT.xml | head -n1)"                  # native: these two lines
+   PSQL=(psql -h 127.0.0.1 -p 5432 -U mdmesh -d mdmesh -X)
+   ```
+
+2. Find the customer's `id`:
+
+   ```bash
+   "${PSQL[@]}" -c "SELECT c.id, c.name, c.email, to_timestamp(c.registrationTime / 1000) AS created,
+     to_timestamp(c.lastLoginTime / 1000) AS last_sign_in,
+     (SELECT string_agg(u.login, ', ') FROM users u WHERE u.customerId = c.id) AS logins,
+     (SELECT count(*) FROM devices d WHERE d.customerId = c.id) AS devices
+     FROM customers c WHERE c.id > 1 ORDER BY c.id"
+   ```
+
+   To see what the account did (here customer 5):
+   `"${PSQL[@]}" -c "SELECT to_timestamp(createTime / 1000), login, action, ipAddress FROM plugin_audit_log WHERE customerId = 5 ORDER BY createTime"`.
+3. Save this as `remove-customer.sql`:
+
+   ```sql
+   SELECT count(*) = 1 AS found FROM customers WHERE id = :cid AND id > 1 AND NOT master \gset
+   \if :found
+   SELECT filesDir AS files_dir FROM customers WHERE id = :cid
+     AND filesDir ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+   CREATE TEMP TABLE gone ON COMMIT DROP AS SELECT number FROM devices WHERE customerId = :cid;
+   DELETE FROM agentCommand WHERE deviceNumber IN (SELECT number FROM gone);
+   DELETE FROM device_state WHERE deviceNumber IN (SELECT number FROM gone);
+   DELETE FROM device_event WHERE deviceNumber IN (SELECT number FROM gone);
+   DELETE FROM device_location WHERE deviceNumber IN (SELECT number FROM gone);
+   DELETE FROM agentRolloutCanary WHERE rolloutId IN (SELECT id FROM agentRollout WHERE customerId = :cid);
+   DELETE FROM agentRollout WHERE customerId = :cid;
+   DELETE FROM agentEnrollmentToken WHERE customerId = :cid;
+   DELETE FROM configurations WHERE customerId = :cid;
+   DELETE FROM customers WHERE id = :cid AND id > 1 AND NOT master;
+   \else
+   \echo 'No customer with that id above 1: nothing changed.'
+   \endif
+   ```
+
+   The agent tables and enrollment tokens name devices and customers without a foreign key, so they go first.
+   Configurations go before the customer because they point at its application versions with `ON DELETE RESTRICT`.
+   Deleting the customer removes the rest through `ON DELETE CASCADE`.
+4. Stop the server (`docker compose stop server`, or `systemctl stop mdmesh-server`), then run the file with the
+   customer's id:
+
+   ```bash
+   "${PSQL[@]}" -v ON_ERROR_STOP=1 --single-transaction -v cid=5 < remove-customer.sql
+   ```
+
+5. Start the server again: `docker compose start server`, or `systemctl start mdmesh-server`.
+6. If step 4 printed a `files_dir`, delete that directory. `${DIR:?}` refuses an empty name, which would delete every
+   customer's files:
+
+   ```bash
+   DIR=<files_dir>
+   docker compose exec -T server rm -r -- "/opt/mdmesh/files/${DIR:?}"     # native: rm -r -- "/opt/mdmesh/files/${DIR:?}"
+   ```
+
+The removed customer's users are signed out, since every request re-reads its user. Once no customer above id 1 is
+left, the server logs no `SECURITY:` lines about customers at startup, and the install's org admin can update again.
+
 ## Moving to a new BASE_URL
 
 Enrolled devices keep polling the old URL until you factory-reset or re-provision them. So keep the old address
@@ -313,7 +389,10 @@ It never touches apt packages, your proxy or the git checkout.
   admin no password works for, until an installer (or `scripts/dev-seed.sh`) sets one.
 - The Headwind launcher endpoints are off by default (404). MQTT push is off; agents are woken over a WebSocket.
 - The supervisor mounts the Docker socket, so it is trusted. It acts only on minisign-verified manifests and on
-  authorized callers (an admin session or the recovery token). Apply and rollback only recreate `server` and `caddy`.
+  authorized callers (the recovery token, or the session of an admin who may update: a super-admin, or the org admin
+  of a single-customer install). Apply and rollback only recreate `server` and `caddy`.
+- Setting a password ends that account's other sessions and API tokens. Password reset links work once, for 24 hours.
+- The console session cookie is `SameSite=Lax`.
 
 ### Native installs
 

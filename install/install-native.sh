@@ -939,6 +939,8 @@ tc_write conf/Catalina/localhost/ROOT.xml cat <<XML
     <!-- SPA fallback: serve index.html for client-side routes so a reload on /devices etc. works.
          Rules live in webapps/ROOT/WEB-INF/rewrite.config (written below). -->
     <Valve className="org.apache.catalina.valves.rewrite.RewriteValve"/>
+    <!-- The session cookie is SameSite=Lax: a cross-site page cannot send a POST, PUT or DELETE with it. -->
+    <CookieProcessor className="org.apache.tomcat.util.http.Rfc6265CookieProcessor" sameSiteCookies="lax"/>
     <Parameter name="JDBC.driver"   value="org.postgresql.Driver"/>
     <Parameter name="JDBC.url"      value="jdbc:postgresql://127.0.0.1:5432/mdmesh"/>
     <Parameter name="JDBC.username" value="mdmesh"/>

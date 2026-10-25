@@ -35,6 +35,7 @@ import com.hmdm.rest.json.view.user.UserView;
 import com.hmdm.service.EmailService;
 import com.hmdm.service.RsaKeyService;
 import com.hmdm.util.BackgroundTaskRunnerService;
+import com.hmdm.util.PasswordResetTokens;
 import com.hmdm.util.PasswordUtil;
 
 import javax.inject.Inject;
@@ -61,7 +62,6 @@ public class AuthResource {
     private CustomerDAO customerDAO;
     private UnsecureDAO settingsDAO;
     private BackgroundTaskRunnerService taskRunner;
-    private boolean customerSignup;
     private EmailService emailService;
     private RsaKeyService rsaKeyService;
     private boolean transmitPassword;
@@ -83,7 +83,6 @@ public class AuthResource {
                         BackgroundTaskRunnerService taskRunner,
                         EmailService emailService,
                         RsaKeyService rsaKeyService,
-                        @Named("customer.signup") boolean customerSignup,
                         @Named("transmit.password") boolean transmitPassword,
                         @Named("auth.class") HmdmAuthInterface authEngine) {
         this.userDAO = userDAO;
@@ -92,7 +91,6 @@ public class AuthResource {
         this.taskRunner = taskRunner;
         this.emailService = emailService;
         this.rsaKeyService = rsaKeyService;
-        this.customerSignup = customerSignup;
         this.transmitPassword = transmitPassword;
         this.authEngine = authEngine;
     }
@@ -159,13 +157,20 @@ public class AuthResource {
 
             if (user.getAuthToken() == null || user.getAuthToken().length() == 0) {
                 user.setAuthToken(PasswordUtil.generateToken());
-                user.setNewPassword(user.getPassword());        // copy value for setUserNewPasswordUnsecure
-                userDAO.setUserNewPasswordUnsecure(user);
+                userDAO.setAuthTokenUnsecure(user);
+            }
+
+            // A forced change at first sign-in uses a reset token, which expires. The password was just proven, so a
+            // token that expired (or was seeded without an issue time) is replaced with a fresh one.
+            if (user.isPasswordReset() && !PasswordResetTokens.isFresh(user, System.currentTimeMillis())) {
+                PasswordResetTokens.issue(user, System.currentTimeMillis());
+                userDAO.setPasswordResetTokenUnsecure(user);
             }
 
             user.setPassword(null);
 
             user.setSingleCustomer(userDAO.isSingleCustomer());
+            user.setDeploymentAdmin(userDAO.mayManageDeployment(user));
 
             return Response.OK(new UserView(user));
         } catch (Exception e) {
@@ -197,7 +202,7 @@ public class AuthResource {
     @Produces( MediaType.APPLICATION_JSON )
     public Response options() {
         AuthOptionsResponse response = new AuthOptionsResponse();
-        response.setSignup(emailService.isConfigured() && customerSignup);
+        response.setSignup(false);  // MDMesh has no self-signup
         response.setRecover(emailService.isConfigured());
         if (transmitPassword) {
             PublicKey publicKey = rsaKeyService.getPublicKey();

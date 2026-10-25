@@ -24,7 +24,6 @@ package com.hmdm.service;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import com.hmdm.event.EventService;
-import com.hmdm.persistence.domain.Customer;
 import com.hmdm.util.StringUtil;
 import liquibase.util.FileUtil;
 import org.apache.commons.io.FileUtils;
@@ -72,10 +71,6 @@ public class EmailService {
 
     private final String recoveryEmailSubj;
     private final String recoveryEmailBody;
-    private final String signupEmailSubj;
-    private final String signupEmailBody;
-    private final String signupCompleteEmailSubj;
-    private final String signupCompleteEmailBody;
 
     @Inject
     public EmailService(@Named("smtp.host") String smtpHost,
@@ -90,11 +85,7 @@ public class EmailService {
                         @Named("rebranding.name") String appName,
                         @Named("base.url") String baseUrl,
                         @Named("email.recovery.subj") String recoveryEmailSubj,
-                        @Named("email.recovery.body") String recoveryEmailBody,
-                        @Named("email.signup.subj") String signupEmailSubj,
-                        @Named("email.signup.body") String signupEmailBody,
-                        @Named("email.signup.complete.subj") String signupCompleteEmailSubj,
-                        @Named("email.signup.complete.body") String signupCompleteEmailBody) {
+                        @Named("email.recovery.body") String recoveryEmailBody) {
         this.smtpHost = smtpHost;
         this.smtpPort = smtpPort;
         this.sslEnabled = sslEnabled;
@@ -111,10 +102,6 @@ public class EmailService {
         this.appName = appName;
         this.recoveryEmailSubj = recoveryEmailSubj;
         this.recoveryEmailBody = recoveryEmailBody;
-        this.signupEmailSubj = signupEmailSubj;
-        this.signupEmailBody = signupEmailBody;
-        this.signupCompleteEmailSubj = signupCompleteEmailSubj;
-        this.signupCompleteEmailBody = signupCompleteEmailBody;
     }
 
     public boolean isConfigured() {
@@ -240,68 +227,6 @@ public class EmailService {
 
         return getLocalizedText(recoveryEmailBody, language)
                 .replace("${passwordResetUrl}", passwordResetUrl);
-    }
-
-    public String getVerifyEmailSubj(String language) {
-        return getLocalizedText(signupEmailSubj, language);
-    }
-
-    public String getVerifyEmailBody(String language, String verifyToken) {
-        String signupCompleteUrl = baseUrl + "/#/signupComplete/" + verifyToken;
-
-        return getLocalizedText(signupEmailBody, language)
-                .replace("${signupCompleteUrl}", signupCompleteUrl);
-    }
-
-    public String getSignupCompleteEmailSubj(String language) {
-        return getLocalizedText(signupCompleteEmailSubj, language);
-    }
-
-
-    public String getSignupCompleteEmailBody(Customer customer) {
-        String deviceIds = customer.getPrefix() + "001, " +
-                customer.getPrefix() + "002," +
-                customer.getPrefix() + "003";
-
-        return getLocalizedText(signupCompleteEmailBody, customer.getLanguage())
-                .replace("${firstName}", customer.getFirstName())
-                .replace("${lastName}", customer.getLastName())
-                .replace("${customerName}", customer.getName())
-                .replace("${deviceLimit}", "" + customer.getDeviceLimit())
-                .replace("${sizeLimit}", "" + customer.getSizeLimit() + " Mb")
-                .replace("${prefix}", customer.getPrefix())
-                .replace("${deviceIds}", deviceIds);
-    }
-
-    public String getSignupNotifyEmailSubj() {
-        return "New customer created at " + appName;
-    }
-
-    public String getSignupNotifyEmailBody(Customer customer) {
-        int schemePos = baseUrl.indexOf("://");
-        String server = schemePos != -1 ? baseUrl.substring(schemePos + 3) : baseUrl;
-
-        StringBuilder builder = new StringBuilder();
-        builder.append("Username: ");
-        builder.append(customer.getName());
-        builder.append("\n<br>");
-        builder.append("Email: ");
-        builder.append(customer.getEmail());
-        builder.append("\n<br>");
-        builder.append("Name: ");
-        builder.append(customer.getFirstName());
-        builder.append(" ");
-        builder.append(customer.getLastName());
-        builder.append("\n<br>");
-        builder.append("Description: ");
-        builder.append(customer.getDescription());
-        builder.append("\n<br>");
-        builder.append("Language: ");
-        builder.append(customer.getLanguage());
-        builder.append("\n<br>");
-        builder.append("Server: ");
-        builder.append(server);
-        return builder.toString();
     }
 
     // Default language is English

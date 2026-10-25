@@ -38,7 +38,7 @@ public class KioskLockoutAlertTest {
         RuntimeException failWith;
 
         FakeEmail() {
-            super("", 25, false, false, "", "", "", "", "mdm@localhost", "", "", "", "", "", "", "", "");
+            super("", 25, false, false, "", "", "", "", "mdm@localhost", "", "", "", "");
         }
 
         @Override public boolean isConfigured() { return configured; }

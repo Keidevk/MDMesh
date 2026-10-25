@@ -45,7 +45,6 @@ public class PublicRouteInventoryTest {
             "/rest/public/auth",                // console sign-in
             "/rest/public/jwt",                 // API client sign-in
             "/rest/public/passwordReset",       // console password reset
-            "/rest/public/signup",              // signup (off unless configured)
             "/rest/public/name",                // health / branding
             "/rest/public/logo",                // branding
             "/rest/plugin/main/public/registered", // plugin list for the console shell

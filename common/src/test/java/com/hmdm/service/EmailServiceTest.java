@@ -15,7 +15,7 @@ public class EmailServiceTest {
 
     private static EmailService service() {
         return new EmailService("smtp.example.com", 587, false, true, "", "", "mdm", "pw", "mdm@example.com",
-                "", "", "", "", "", "", "", "");
+                "", "", "", "");
     }
 
     @Test

@@ -8,6 +8,41 @@ line under Unreleased.
 
 ## Unreleased
 
+Upgrading
+- Update every server: this is a security release. The security fixes need no new agent; the location fix below
+  needs agent 0.3.8.
+- Update the updater too, since updates never touch it. Quick-start installs: apply the update from Settings →
+  Updates, then `docker compose pull && docker compose up -d` (if `.env` pins `SUPERVISOR_VERSION`, set it to 0.3.8
+  first). From source: `git pull && ./setup.sh`, which also moves the pinned `SUPERVISOR_VERSION`. Native installs:
+  re-run the installer, which updates both. Either order works.
+- Single-customer installs: check for customers you didn't create, and remove them (docs/UPGRADING.md, v0.3.8).
+  The server lists them at startup.
+
+Heads-up
+- Updates are for the admin who runs the install: a super-admin, or the org admin (the built-in Administrator role) of
+  a single-customer install (every install made with quick start, setup.sh or the native installer is one). Once an
+  install has a second customer, only a super-admin can apply, roll back, check for or schedule updates. The recovery
+  token still rolls back.
+- Setting a password ends that account's other console sessions and its API tokens. The session that changed its own
+  password stays signed in. API clients sign in again.
+- Password reset links work once, for 24 hours. Links sent before the update no longer work: ask for a new one.
+- Impersonating a user or a customer's admin is a POST; a GET answers 405. The console doesn't use these routes.
+
+Security
+- The self-signup API is removed. MDMesh never offered self-signup; its routes now answer 404. At startup, a
+  single-customer install logs any other customer it has, with how to remove it.
+- The updater asks the server whether the session may manage the deployment before it applies, rolls back or changes
+  automatic updates. On an install with more than one customer, only a super-admin may. In front of an older server,
+  only a super-admin or the org admin of customer 1 may.
+- Every customer account route needs a super-admin.
+- Setting a password, by reset link, at first sign-in, by the user or by an admin, ends the account's other sessions
+  and API tokens. Reset links expire after 24 hours and work once. An account gets at most 3 recovery mails an hour.
+- The console session cookie is SameSite=Lax: another site's forms and scripts can't POST, PUT or DELETE with it.
+  Purging message history in the messaging and push plugins, and impersonating, are POSTs.
+- A new customer admin's first password, the signature a refused download should have had, and a deleted customer's
+  file paths are no longer logged.
+- Thanks to a security researcher (#120) for the report.
+
 Fixes
 - Location: devices enrolled by QR code report their location. The agent grants itself the background location access
   it was missing, and "GPS (fresh fix)" configurations get a fresh fix instead of always timing out. Needs agent

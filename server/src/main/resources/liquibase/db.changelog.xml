@@ -3007,4 +3007,13 @@
         <rollback>DROP INDEX IF EXISTS agentCommand_one_open_config_apply;</rollback>
     </changeSet>
 
+    <changeSet id="26.10.23-users-passwordResetTokenTime" author="lunacy" context="common">
+        <comment>Column,new: users#passwordResetTokenTime (ms since epoch): when the password reset token was issued.
+            A token is good for 24 hours. NULL (every token issued before this change, and installer seeds) counts as
+            expired; signing in with the password issues a fresh one where a change is forced, and a recovery request
+            issues a new link.</comment>
+        <sql>ALTER TABLE users ADD COLUMN passwordResetTokenTime BIGINT;</sql>
+        <rollback>ALTER TABLE users DROP COLUMN passwordResetTokenTime;</rollback>
+    </changeSet>
+
 </databaseChangeLog>

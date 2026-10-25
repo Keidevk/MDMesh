@@ -19,7 +19,8 @@ applies them: it backs up the database, then rolls back if the new version fails
 
 ## Quick-start installs
 
-An admin clicks **Update** on the console's banner. A failed update rolls back by itself.
+The install's admin (a super-admin, or the org admin of a single-customer install) clicks **Update** on the console's
+banner. A failed update rolls back by itself.
 
 **Automatic updates** (Settings, or `AUTO_UPDATE=1`) apply each release without a prompt. Once `/backups/auto.json`
 exists (the Settings switch, or any failed or rolled-back update, creates it), it wins over `AUTO_UPDATE`; change it
@@ -78,7 +79,7 @@ enrollment secret alone, after a `pg_dump` to `/opt/mdmesh/backups/` ([restore](
 ### The recovery page
 
 With one-click updates (`APPLY_SUPPORTED=1`), `https://<host>/recovery` shows the update status and a **Roll back**
-button. Signed in, you need no token. If the server is down, use the recovery token instead:
+button. Signed in as an admin who can update, you need no token. If the server is down, use the recovery token instead:
 
 ```bash
 docker compose exec supervisor cat /backups/recovery.token
@@ -139,6 +140,62 @@ server doesn't update agents; roll them out from **Settings → Agent rollout** 
 available).
 
 ## Version notes
+
+### v0.3.8
+
+A security release. Update every server. Devices need no new agent.
+
+- **Update the supervisor too.** Part of this release is in the supervisor, and updates never touch it:
+  - **Quick start:** apply 0.3.8 from **Settings → Updates**, then run `docker compose pull && docker compose up -d`
+    in the install directory. The quick start sets `SUPERVISOR_VERSION=latest`; if you pinned it in `.env`, set it to
+    `0.3.8` first.
+  - **From source:** `git pull && ./setup.sh`, also after applying 0.3.8 from the console with a registry
+    `IMAGE_OWNER`. setup.sh pins `SUPERVISOR_VERSION` to the checkout's release and rebuilds the supervisor, so
+    `docker compose pull` alone keeps the old one.
+  - **Native:** `git pull && sudo ./setup.sh --native`, which updates both.
+
+  Either order works. In front of an older server, a 0.3.8 supervisor lets only a super-admin, or the org admin of
+  customer 1, update.
+- **Who can update:** the admin who runs the install. That is a super-admin, or the org admin (the built-in
+  Administrator role) of a single-customer install. Every install made with quick start, `setup.sh` or the native
+  installer is single-customer and has no super-admin, so its admin keeps updating. Another admin with a custom role
+  can't, even with the Settings permission. Once an install has a second customer, only a super-admin can apply an
+  update, roll back, check for updates or switch automatic updates. The updater refuses everyone else, and the
+  console hides the buttons from them. The recovery token still rolls back when the server is down.
+- **Customers you didn't create:** check every single-customer install ([below](#customers-you-didnt-create)).
+- **A new password signs the account out elsewhere:** setting a password (a reset link, the change at first sign-in,
+  the user's own change, an admin's change) ends that account's other console sessions and its API tokens
+  (`/rest/public/jwt/login`). The console session that changed its own password stays signed in. API clients sign
+  in again.
+- **Reset links:** a password reset link works once, for 24 hours. Links sent before the update no longer work; ask
+  for a new one. An account that must change its password at first sign-in gets a fresh link when it signs in, so
+  freshly installed admins are not affected. An account gets at most 3 recovery mails an hour.
+- **Self-signup:** the `/rest/public/signup/*` API is removed (404). MDMesh never offered it. The `customer.signup*`
+  and `email.signup*` settings are ignored.
+- **Impersonation is a POST:** `/rest/private/users/impersonate/{id}` and `/rest/private/customers/impersonate/{id}`
+  answer only POST; a GET gets 405. The console doesn't use them. A script that calls them must POST.
+- **Session cookie:** the console's session cookie is `SameSite=Lax`. Docker sets it on every start, native installs
+  when the installer rewrites `ROOT.xml`.
+
+#### Customers you didn't create
+
+A single-customer install has one customer, id 1. Before 0.3.8, the self-signup API could add more. From 0.3.8 on,
+the server lists any others at startup, in `SECURITY:` lines:
+
+```bash
+docker compose logs server | grep 'SECURITY:'        # native: journalctl -u mdmesh-server | grep 'SECURITY:'
+```
+
+Or ask the database (Docker; on native, run the query as in [Removing a customer](OPERATIONS.md#removing-a-customer)):
+
+```bash
+docker compose exec -T postgres psql -X -U mdmesh -d mdmesh -c \
+  "SELECT id, name, email, to_timestamp(registrationTime / 1000) AS created FROM customers WHERE id > 1"
+```
+
+No rows means you are not affected. Remove each customer you didn't add yourself, with
+[Removing a customer](OPERATIONS.md#removing-a-customer). Until then the install counts as multi-customer: only a
+super-admin may update it, and it has none. Removing them restores that.
 
 ### v0.3.7
 

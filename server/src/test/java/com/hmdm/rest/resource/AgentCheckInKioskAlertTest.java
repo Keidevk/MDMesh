@@ -70,7 +70,7 @@ public class AgentCheckInKioskAlertTest {
         final List<String> to = new ArrayList<>();
         RuntimeException failWith;
         FakeEmail() {
-            super("", 25, false, false, "", "", "", "", "mdm@localhost", "", "", "", "", "", "", "", "");
+            super("", 25, false, false, "", "", "", "", "mdm@localhost", "", "", "", "");
         }
         @Override public boolean isConfigured() { return true; }
         @Override public boolean sendPlainTextEmail(String to, String subj, String body) {

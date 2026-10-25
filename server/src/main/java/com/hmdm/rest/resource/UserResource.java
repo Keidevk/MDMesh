@@ -28,6 +28,7 @@ import com.hmdm.persistence.CommonDAO;
 import com.hmdm.persistence.UnsecureDAO;
 import com.hmdm.persistence.domain.Customer;
 import com.hmdm.persistence.domain.Settings;
+import com.hmdm.util.PasswordResetTokens;
 import com.hmdm.util.PasswordUtil;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -48,6 +49,7 @@ import javax.servlet.http.HttpSession;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
+import javax.ws.rs.POST;
 import javax.ws.rs.PUT;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
@@ -137,6 +139,7 @@ public class UserResource {
         return SecurityContext.get().getCurrentUser().map(u -> {
             User userDetails = userDAO.getUserDetails(u.getId());
             userDetails.setPassword(null);
+            userDetails.setDeploymentAdmin(unsecureDAO.mayManageDeployment(userDetails));
 
             return Response.OK(userDetails);
         }).orElse(Response.OK(null));
@@ -187,7 +190,7 @@ public class UserResource {
     @Path("/current")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response updatePassword(User user) {
+    public Response updatePassword(User user, @Context HttpServletRequest req) {
         return SecurityContext.get().getCurrentUser().map(u -> {
             if (!u.getId().equals(user.getId())) {
                 logger.warn("Failed to update password: u.getId()=" + u.getId() + ", user.getId()=" + user.getId());
@@ -195,9 +198,27 @@ public class UserResource {
             }
 
             User dbUser = userDAO.findByLoginOrEmail(u.getLogin());
-            return updatePassword(dbUser, user);
+            Response response = updatePassword(dbUser, user);
+            if (response.getStatus() == Response.ResponseStatus.OK) {
+                keepThisSession(req, dbUser);
+            }
+            return response;
 
         }).orElse(Response.PERMISSION_DENIED());
+    }
+
+    /**
+     * A password change gives the user a new authToken, which ends every session and JWT of the old password
+     * (AuthFilter and JWTFilter compare it with the stored one). The session that made the change carries on: it is
+     * moved to the new token. A JWT caller signs in again.
+     */
+    private static void keepThisSession(HttpServletRequest req, User changed) {
+        HttpSession session = req == null ? null : req.getSession(false);
+        Object credentials = session == null ? null : session.getAttribute(sessionCredentials);
+        if (credentials instanceof User && changed.getId().equals(((User) credentials).getId())) {
+            ((User) credentials).setAuthToken(changed.getAuthToken());
+            session.setAttribute(sessionCredentials, credentials);
+        }
     }
 
     // =================================================================================================================
@@ -288,10 +309,10 @@ public class UserResource {
         user.setAuthToken(PasswordUtil.generateToken());
         if (reset) {
             user.setPasswordReset(true);
-            user.setPasswordResetToken(PasswordUtil.generateToken());
+            PasswordResetTokens.issue(user, System.currentTimeMillis());
         } else {
             user.setPasswordReset(false);
-            user.setPasswordResetToken(null);
+            PasswordResetTokens.clear(user);
         }
         return user;
     }
@@ -435,7 +456,9 @@ public class UserResource {
         }
     }
 
-    @GET
+    // A POST, so another site can't switch an admin's session with a link (the SameSite=Lax cookie goes with a
+    // cross-site GET navigation, not with a cross-site POST).
+    @POST
     @Path("/impersonate/{id}")
     @Produces(MediaType.APPLICATION_JSON)
     public Response login(@PathParam("id") Integer id,
@@ -499,10 +522,9 @@ public class UserResource {
         }
 
         dbUser.setPassword(PasswordUtil.getHashFromMd5(user.getNewPassword()));
-        dbUser.setAuthToken(PasswordUtil.generateToken());
         dbUser.setPasswordReset(false);
-        dbUser.setPasswordResetToken(null);
-        userDAO.updatePassword(dbUser);
+        PasswordResetTokens.clear(dbUser);
+        userDAO.updatePassword(dbUser);     // also issues the new authToken
 
         logger.info("Password for {} is updated", user.getLogin());
         return Response.OK("success.operation.completed", dbUser);
