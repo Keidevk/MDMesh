@@ -4,6 +4,7 @@
 package com.hmdm.rest.resource.support;
 
 import com.hmdm.persistence.domain.Device;
+import com.hmdm.util.WindowLimiter;
 
 import java.util.function.LongSupplier;
 

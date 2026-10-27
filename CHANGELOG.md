@@ -8,6 +8,38 @@ line under Unreleased.
 
 ## Unreleased
 
+Upgrading
+- Update every server: this is a security release. Devices need no new agent, and the updater (supervisor) is
+  unchanged. Quick-start and from-source installs: apply the update from Settings → Updates. Native installs: re-run
+  the installer.
+
+Heads-up
+- Sign-in is limited. After 10 failed sign-ins from one address in 15 minutes (or 50 in 6 hours), that address is
+  refused for a while; after 20 failed sign-ins for one account in 15 minutes, new browsers on new addresses are
+  refused for it for a while. A browser or API client that signed in to the account before (the MDMESH_SIGNIN
+  cookie), and an address that signed in to it in the last 30 days, keep signing in. The console says "Too many
+  failed sign-ins"; the API answers 429 with Retry-After: 900. Checking the current password for a password or
+  e-mail change counts too. A server restart clears every limit (docs/OPERATIONS.md).
+- A token sign-in (/rest/public/jwt/login) also sets the MDMESH_SIGNIN cookie: API clients that keep it are spared
+  someone else's failed sign-ins.
+- Native installs behind a proxy on another host must list it in proxy.addresses, and Docker installs behind a CDN
+  or another proxy in front of Caddy must add it to TRUSTED_PROXIES in .env: otherwise every client shares one
+  sign-in limit (docs/UPGRADING.md).
+- On an install whose BASE_URL is https, the console session cookie is Secure, and the console can no longer be
+  signed in to over plain http (for example through Tomcat's own port on a native install). Use the https address.
+- The edge, and on native installs the server, send browser security headers: the console can't be put in a frame,
+  and https installs get Strict-Transport-Security for six months.
+- A request path with a `;` or an encoded `/`, `\`, `;` or `.` is refused with 400. No MDMesh client sends one. A
+  hosted file whose name has a `;` can't be downloaded: upload it again (uploads now replace `;`).
+
+Security
+- Requests to the console's and plugins' private routes always need a signed-in user, however the path is spelled.
+- Failed sign-ins no longer hold a server thread, and password guessing is limited per address and per account.
+- The session cookie is Secure on https installs. The edge and the server send no-framing, nosniff, Referrer-Policy and
+  (on https) HSTS headers.
+- The mail library is Jakarta Mail 1.6.8 (CVE-2025-7962).
+- Thanks to Przemek-Magic for the report.
+
 ## v0.3.8 — 2026-10-26
 
 Upgrading

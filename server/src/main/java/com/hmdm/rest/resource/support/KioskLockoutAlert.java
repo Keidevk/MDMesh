@@ -49,7 +49,7 @@ public class KioskLockoutAlert {
 
     @Inject
     public KioskLockoutAlert(UserMapper userMapper, EmailService emailService, @Named("base.url") String baseUrl) {
-        this(userMapper, emailService, baseUrl, newMailThread(), new KioskAlertLimits(System::currentTimeMillis),
+        this(userMapper, emailService, baseUrl, newMailThread(), new KioskAlertLimits(com.hmdm.util.WindowLimiter.MONOTONIC),
                 System::currentTimeMillis);
     }
 

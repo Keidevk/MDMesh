@@ -197,6 +197,11 @@ public class ConfigureModule extends AbstractModule {
         this.bindConstant().annotatedWith(Names.named(sqlInitScriptPath)).to(opt != null ? opt : "");
         opt = this.context.getInitParameter(proxyAddresses);
         this.bindConstant().annotatedWith(Names.named(proxyAddresses)).to(opt != null ? opt : "");
+        // 1 on Docker (docker/entrypoint.sh): only the edge reaches the server there, so any private-network peer is
+        // the install's proxy. Native leaves it off: a LAN client can reach Tomcat directly (LoginThrottle).
+        opt = this.context.getInitParameter(com.hmdm.security.LoginThrottle.PRIVATE_PEERS_ARE_PROXIES);
+        this.bindConstant().annotatedWith(Names.named(com.hmdm.security.LoginThrottle.PRIVATE_PEERS_ARE_PROXIES)).to(
+                opt != null && (opt.trim().equals("1") || opt.trim().equalsIgnoreCase("true")));
         opt = this.context.getInitParameter(proxyIpHeader);
         this.bindConstant().annotatedWith(Names.named(proxyIpHeader)).to(opt != null ? opt : "");
         opt = this.context.getInitParameter(customerAutoStatus);

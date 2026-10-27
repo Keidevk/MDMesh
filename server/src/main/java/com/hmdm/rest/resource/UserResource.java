@@ -38,6 +38,7 @@ import com.hmdm.persistence.UserDAO;
 import com.hmdm.persistence.domain.User;
 import com.hmdm.persistence.domain.UserRole;
 import com.hmdm.rest.json.Response;
+import com.hmdm.security.LoginThrottle;
 import com.hmdm.security.SecurityContext;
 import com.hmdm.security.SecurityException;
 import org.slf4j.Logger;
@@ -74,6 +75,7 @@ public class UserResource {
     private UserDAO userDAO;
     private CommonDAO settingsDAO;
     private UnsecureDAO unsecureDAO;
+    private LoginThrottle loginThrottle;
 
     /**
      * <p>A constructor required by Swagger.</p>
@@ -85,10 +87,11 @@ public class UserResource {
      * <p>Constructs new <code>UserResource</code> instance. This implementation does nothing.</p>
      */
     @Inject
-    public UserResource(UserDAO userDAO, CommonDAO settingsDAO, UnsecureDAO unsecureDAO) {
+    public UserResource(UserDAO userDAO, CommonDAO settingsDAO, UnsecureDAO unsecureDAO, LoginThrottle loginThrottle) {
         this.userDAO = userDAO;
         this.settingsDAO = settingsDAO;
         this.unsecureDAO = unsecureDAO;
+        this.loginThrottle = loginThrottle;
     }
 
     // =================================================================================================================
@@ -198,7 +201,7 @@ public class UserResource {
             }
 
             User dbUser = userDAO.findByLoginOrEmail(u.getLogin());
-            Response response = updatePassword(dbUser, user);
+            Response response = updatePassword(dbUser, user, req);
             if (response.getStatus() == Response.ResponseStatus.OK) {
                 keepThisSession(req, dbUser);
             }
@@ -357,7 +360,7 @@ public class UserResource {
     @Path("/details")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response updateUserDetails(User user) {
+    public Response updateUserDetails(User user, @Context HttpServletRequest req) {
         return SecurityContext.get().getCurrentUser().map(u -> {
             // Users edit their own details; other accounts are edited by their administrators only
             boolean self = user.getId() == null || user.getId().equals(u.getId());
@@ -379,10 +382,11 @@ public class UserResource {
                 dbUser.setEmail("");
             } else if (!user.getEmail().equalsIgnoreCase(dbUser.getEmail())) {
                 // Password recovery links go to this address: changing it takes the caller's current password
-                if (!isCurrentPassword(u, user.getOldPassword())) {
-                    logger.warn("Failed to update email of user {}: current password of {} not match",
+                Response refused = currentPasswordRefused(u, user.getOldPassword(), req);
+                if (refused != null) {
+                    logger.warn("Failed to update email of user {}: current password of {} not accepted",
                             dbUser.getLogin(), u.getLogin());
-                    return Response.ERROR("error.password.wrong");
+                    return refused;
                 }
                 // Email must be unique
                 User user2 = unsecureDAO.findByEmail(user.getEmail());
@@ -500,20 +504,39 @@ public class UserResource {
         }).orElse(Response.PERMISSION_DENIED());
     }
 
-    private boolean isCurrentPassword(User currentUser, String password) {
-        if (password == null || password.isEmpty()) {
-            return false;
+    /**
+     * Null when {@code password} is the current password of {@code currentUser}; else the error to answer. The check
+     * counts against the same limits as sign-in (LoginThrottle): a session is no way to guess its password without a
+     * limit either, and failures here lock that account like failed sign-ins do.
+     */
+    private Response currentPasswordRefused(User currentUser, String password, HttpServletRequest req) {
+        if (password == null || password.isEmpty() || currentUser == null) {
+            return Response.ERROR("error.password.wrong");
         }
         User dbUser = userDAO.findByLoginOrEmail(currentUser.getLogin());
-        return dbUser != null && dbUser.getId().equals(currentUser.getId()) &&
-                PasswordUtil.passwordMatch(password, dbUser.getPassword());
+        if (dbUser == null || !dbUser.getId().equals(currentUser.getId())) {
+            return Response.ERROR("error.password.wrong");
+        }
+        LoginThrottle.Verdict verdict = loginThrottle.begin(req, dbUser, dbUser.getLogin());
+        if (!verdict.allowed()) {
+            return Response.ERROR(AuthResource.TOO_MANY_ATTEMPTS);
+        }
+        if (!PasswordUtil.passwordMatch(password, dbUser.getPassword())) {
+            return Response.ERROR("error.password.wrong");
+        }
+        loginThrottle.succeeded(verdict.attempt());
+        return null;
     }
 
-    private Response updatePassword(User dbUser, User user) {
-        if (user.getNewPassword() == null || user.getOldPassword() == null ||
-                !PasswordUtil.passwordMatch(user.getOldPassword(), dbUser.getPassword())) {
+    private Response updatePassword(User dbUser, User user, HttpServletRequest req) {
+        if (user.getNewPassword() == null || user.getOldPassword() == null) {
             logger.warn("Failed to update password for {}: current password not match", user.getLogin());
             return Response.ERROR("error.password.wrong");
+        }
+        Response refused = currentPasswordRefused(dbUser, user.getOldPassword(), req);
+        if (refused != null) {
+            logger.warn("Failed to update password for {}: current password not accepted", user.getLogin());
+            return refused;
         }
 
         if (user.getNewPassword() == null || user.getNewPassword().isEmpty()) {

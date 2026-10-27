@@ -8,7 +8,8 @@
 	# Set per listener, so each hosting mode gets its own rule. Strict mode reads a header list from the right, so an
 	# address a client prepends never counts.
 	#   :443  own domain. Devices connect to Caddy directly, so nothing they send is believed: only a peer in
-	#         TRUSTED_PROXIES (default loopback, which no Docker peer is) may set X-Forwarded-For.
+	#         TRUSTED_PROXIES may set X-Forwarded-For. The compose files pass it from .env; empty there (the default)
+	#         trusts no peer, and unset, loopback only, which no Docker peer is.
 	#   :80   set by docker/edge-peers.sh (the image's entrypoint), by hosting mode. Cloudflare tunnel: cloudflared's
 	#         CF-Connecting-IP, from a private peer. Anything else (the dev stack, a proxy of your own in front):
 	#         TRUSTED_PROXIES and X-Forwarded-For, as on :443. The defaults here are that second rule.
@@ -33,8 +34,45 @@
 	header_up -CF-Connecting-IP
 }
 
+# Browser security headers, on every response the edge sends, the error fallback's included (handle_errors imports
+# this too). No MIME sniffing. No framing: nothing MDMesh serves is meant to be framed (the console, its QR view and
+# the recovery page are top-level pages, and the agent has no WebView). No Referer to other sites; the map's tile
+# images send just the origin, which OpenStreetMap requires (web/src/components/LocationMap.tsx). `defer` applies them
+# after the upstream's own headers, so these are the values the browser gets.
+# HSTS only where the browser is on HTTPS: Caddy's own TLS (own domain), or a proxy in front that says so in
+# X-Forwarded-Proto (Cloudflare tunnel, your own proxy). A browser ignores HSTS received over plain HTTP, so a forged
+# X-Forwarded-Proto gains nothing, and HTTP-only (LAN) installs are unaffected. Six months, this host only, no preload.
+# Importers define @https (a site's named matchers are visible in its handle_errors, and may be defined only once).
+(security_headers) {
+	header {
+		defer
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'"
+		Referrer-Policy same-origin
+	}
+	header @https {
+		defer
+		Strict-Transport-Security "max-age=15552000"
+	}
+}
+
 {$SITE_ADDRESS} {
 	encode gzip
+	@https expression `{http.request.scheme} == "https" || {http.request.header.X-Forwarded-Proto} == "https"`
+	import security_headers
+
+	# A server path that the server's routing would read differently from its security filters: a ";" path
+	# parameter, or an encoded ";", "/" or "\" (or a raw "\"), anywhere in the path of /rest, /files or /agent (the
+	# query string is not looked at). Refused here with 400, before it is proxied; the server refuses these too
+	# (AmbiguousPathFilter), for installs without this edge. {http.request.uri} is the path as sent, still escaped.
+	@ambiguous {
+		path_regexp ^(?i)/(rest|files|agent)([/;\\]|$)
+		expression `{http.request.uri}.matches("^(?i)[^?]*(;|%3b|%2f|%5c|\\\\)")`
+	}
+	handle @ambiguous {
+		respond 400
+	}
 
 	# Canonical agent-APK URL: /files/agent.apk works on BOTH deployment shapes (native serves a
 	# real file from Tomcat; here it's the supervisor's sha256-verified release mirror — the same
@@ -110,6 +148,7 @@
 	# If the server (API) is down/erroring, fall back to the supervisor's recovery page. Not for the health
 	# probes: proxied as-is, /healthz would reach the supervisor's own /healthz and call a dead server "ok".
 	handle_errors {
+		import security_headers
 		handle @healthz {
 			respond "server unavailable" 503
 		}

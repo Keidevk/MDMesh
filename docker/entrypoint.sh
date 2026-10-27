@@ -107,6 +107,10 @@ cat > "$_root_xml_tmp" <<EOF
     <Parameter name="files.directory" value="/opt/mdmesh/files"/>
     <Parameter name="base.url"        value="${BASE_URL}"/>
 
+    <!-- Only the edge (Caddy) reaches the server: a private-network peer is the proxy, and its X-Forwarded-For names
+         the client for the sign-in limit. -->
+    <Parameter name="proxy.private.networks" value="1"/>
+
     <Parameter name="usage.scenario"    value="private"/>
     <Parameter name="secure.enrollment" value="${SECURE_ENROLLMENT}"/>
     <!-- Headwind launcher device routes: off unless 1. The MDMesh agent never uses them. -->

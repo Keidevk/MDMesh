@@ -4,7 +4,7 @@
 #   HTTP_CLIENT_IP_HEADER  that header
 #   Cloudflare tunnel  any private peer, CF-Connecting-IP. cloudflared's address on the stack's network is not fixed,
 #                      and the mode publishes no port, so only the stack's own containers reach the listener.
-#   anything else      TRUSTED_PROXIES (default loopback, which no Docker peer is), X-Forwarded-For. A forged
+#   anything else      TRUSTED_PROXIES (unset or empty: loopback, which no Docker peer is), X-Forwarded-For. A forged
 #                      CF-Connecting-IP is never believed. This covers the dev stack and a proxy of your own in front.
 # Tunnel mode is COMPOSE_PROFILES listing "cloudflare": the compose files pass it from .env, which setup.sh and
 # quickstart.sh write. A compose file from before v0.3.5 passes no COMPOSE_PROFILES (updates keep a quick-start

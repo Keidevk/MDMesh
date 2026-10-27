@@ -141,6 +141,46 @@ available).
 
 ## Version notes
 
+### v0.3.9
+
+A security release. Update every server. Devices need no new agent, and the supervisor is unchanged: quick-start and
+from-source installs apply it from **Settings → Updates**, native installs re-run the installer.
+
+- **Sign-in limits.** Failed sign-ins are limited per address and per account, for the console, for API clients
+  (`/rest/public/jwt/login`) and for the current-password check of a password or e-mail change. A browser or API
+  client that signed in to an account before (it keeps the `MDMESH_SIGNIN` cookie), and an address that signed in to
+  it in the last 30 days, keep signing in while the account is limited; a new browser on a new address waits. The
+  console says "Too many failed sign-ins"; the API answers `429` with `Retry-After: 900`.
+  [Sign-in limits](OPERATIONS.md#sign-in-limits) has the numbers and what to do during an attack.
+- **API clients:** a token sign-in now also sets the `MDMESH_SIGNIN` cookie (path `/rest/public`). Keep it and send it
+  with the next sign-in to be spared someone else's failed sign-ins. Clients that ignore cookies work as before.
+- **https installs: the session cookie is Secure.** When `BASE_URL` starts with `https://`, the browser sends the
+  console's session cookie over https only. Sign in at the https address: signing in over plain http (Tomcat's own
+  port on a native install, say) no longer works. http installs (a LAN address) are unchanged.
+- **Security headers.** Every response says the console may not be framed (`X-Frame-Options: DENY`,
+  `frame-ancestors 'none'`), `nosniff` and `Referrer-Policy: same-origin`; https installs also get
+  `Strict-Transport-Security: max-age=15552000` (six months, this host only). On Docker the edge sends them; on native
+  installs the server does, so a proxy of yours needs no change. A page of your own that framed the console stops
+  working.
+- **Ambiguous paths are refused.** A request path with a `;` or an encoded `/`, `\`, `;` or `.`, or with `//`, `.` or
+  `..` segments, gets `400`. The console, the agent and the QR never send one. A hosted file whose name contains `;`
+  can't be downloaded any more: upload it again (uploads replace `;` with `_` now).
+- **Native installs behind a proxy on another host: list it in `proxy.addresses`.** The server believes
+  `X-Forwarded-For` for the sign-in limit only from a proxy on loopback or one listed there (a proxy in a container
+  counts as another host). Without the entry, the proxy is taken for a single client, so every client behind it
+  shares one address limit: 10 failed sign-ins from anyone refuse every new browser for 15 minutes (browsers and
+  addresses that signed in before keep signing in). The server logs a warning naming the proxy (`... is not a trusted
+  proxy`): re-run the installer with `PROXY_ADDRESSES=<its address>`, or add it to `proxy.addresses` in `ROOT.xml`
+  and restart. Installer re-runs keep it from now on. A LAN-only install with no proxy needs nothing: each client
+  counts by its own address ([Sign-in limits](OPERATIONS.md#sign-in-limits)).
+- **Docker behind a CDN or another proxy in front of Caddy** (Cloudflare's proxy in own-domain mode, a load
+  balancer): add its ranges to `TRUSTED_PROXIES` in `.env`, or every client shares one address limit. A compose file
+  from before v0.3.9 (updates keep yours) doesn't pass that variable to Caddy: add one line to it first
+  ([Sign-in limits](OPERATIONS.md#sign-in-limits)). The Cloudflare tunnel mode needs nothing.
+- **Docker own-domain installs reached over IPv6:** with Docker's default IPv4-only networks, every IPv6 client
+  reaches Caddy from one gateway address and shares one address limit. Turn on IPv6 for the stack's network, or
+  remove the domain's AAAA record ([Sign-in limits](OPERATIONS.md#sign-in-limits)).
+
 ### v0.3.8
 
 A security release. Update every server. Devices need no new agent.

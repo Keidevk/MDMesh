@@ -11,6 +11,8 @@
 #   3b. The client address the server is told, in each hosting mode (docker/edge-peers.sh picks the :80 rule): exactly
 #      Caddy's view of the client, whatever forwarding headers the client sends (echo upstream). Cloudflare mode
 #      publishes no port and gets its mode from COMPOSE_PROFILES; every other setup, the dev stack included, does not.
+#   3c. Ambiguous server paths (";", encoded ";", "/" or "\") are refused with 400, and every response carries the
+#      browser security headers (HSTS only over HTTPS).
 #   4. The dev stack (docker-compose.dev.yml over docker-compose.yml) with docker/dev.env alone, and that the overlay
 #      refuses to load without it.
 # Guards the v0.3.1 Cloudflare-mode break: `email {$ACME_EMAIL}` with the empty ACME_EMAIL that setup.sh and
@@ -46,6 +48,8 @@ MODES=(
   "cloudflare, compose file from before v0.3.5|SITE_ADDRESS=:80 ACME_EMAIL= CLOUDFLARED_WAIT=0"
   "own-domain, no email|SITE_ADDRESS=mdm.example.com ACME_EMAIL= COMPOSE_PROFILES="
   "behind a proxy|SITE_ADDRESS=:80 ACME_EMAIL= COMPOSE_PROFILES= TRUSTED_PROXIES=private_ranges"
+  "own-domain, empty TRUSTED_PROXIES (as the compose files pass it)|SITE_ADDRESS=mdm.example.com ACME_EMAIL=ops@example.com COMPOSE_PROFILES= TRUSTED_PROXIES="
+  ":80, empty TRUSTED_PROXIES|SITE_ADDRESS=:80 ACME_EMAIL= COMPOSE_PROFILES= TRUSTED_PROXIES="
 )
 for mode in "${MODES[@]}"; do
   label="${mode%%|*}"
@@ -259,6 +263,8 @@ SETUPS=(
   "dev stack (:80, no tunnel)|http|SITE_ADDRESS=:80 COMPOSE_PROFILES=|"
   ":80, compose file from before v0.3.5, no cloudflared|http|SITE_ADDRESS=:80 CLOUDFLARED_WAIT=1|"
   "behind your own proxy at 172.18.0.1|proxy|SITE_ADDRESS=:80 COMPOSE_PROFILES= TRUSTED_PROXIES=172.18.0.1/32|"
+  "own-domain, empty TRUSTED_PROXIES (as the compose files pass it)|own-domain|SITE_ADDRESS=localhost COMPOSE_PROFILES= TRUSTED_PROXIES=|"
+  "dev stack, empty TRUSTED_PROXIES|http|SITE_ADDRESS=:80 COMPOSE_PROFILES= TRUSTED_PROXIES=|"
 )
 for setup in "${SETUPS[@]}"; do
   IFS='|' read -r label kind envs extra <<< "$setup"
@@ -274,6 +280,90 @@ for setup in "${SETUPS[@]}"; do
   n="$(grep -c '^  FAIL' <<<"$out" || true)"
   FAILED=$((FAILED + n))
   if [ "$rc" -ne 0 ] && [ "$n" -eq 0 ]; then fail "client address ($label): probe container exited $rc"; fi
+done
+
+# --- 3c. Ambiguous server paths and browser security headers. A ";" path parameter, or an encoded ";", "/" or "\"
+# (or a raw "\"), in a /rest, /files or /agent path is refused with 400 and never proxied (the query string is not
+# looked at); plain paths still reach the server. Every response carries nosniff, no-framing and Referrer-Policy, the
+# upstream's own values replaced, the error fallback (recovery page) included; HSTS only over HTTPS (own domain) or
+# when a proxy in front says X-Forwarded-Proto: https. Stub server and supervisor, as in 3.
+EDGE_PROBE="$(cat <<'PROBE'
+set -u
+F=0
+command -v curl >/dev/null || { echo "  FAIL no curl in the caddy image"; exit 1; }
+mkdir -p /srv /tmp/stub && echo spa > /srv/index.html
+stub() {   # stub <port> <site body>
+  printf '{\n\tadmin off\n}\n:%s {\n%s\n}\n' "$1" "$2" > "/tmp/stub/$1"
+  caddy run --config "/tmp/stub/$1" --adapter caddyfile >/dev/null 2>&1 &
+  echo $! > "/tmp/stub/$1.pid"
+  for _ in $(seq 1 50); do [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$1/")" != 000 ] && return 0; sleep 0.1; done
+  echo "  FAIL stub :$1 never answered"; exit 1
+}
+unstub() { kill "$(cat "/tmp/stub/$1.pid")"; wait "$(cat "/tmp/stub/$1.pid")" 2>/dev/null || true; }
+caddy start --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || { echo "  FAIL edge did not start"; exit 1; }
+if [ "$KIND" = https ]; then
+  BASE=https://localhost; CURL="curl -sk -m 5 --path-as-is --resolve localhost:443:127.0.0.1"
+else
+  BASE=http://127.0.0.1; CURL="curl -s -m 5 --path-as-is"
+fi
+for _ in $(seq 1 100); do [ "$($CURL -o /dev/null -w '%{http_code}' "$BASE/" 2>/dev/null)" = 200 ] && break; sleep 0.1; done
+stub 8080 '	header X-Frame-Options SAMEORIGIN
+	respond "server" 200'
+stub 9000 '	respond "supervisor" 200'
+status() { # status <label> <path> <want status> [want body]
+  rm -f /tmp/body
+  got="$($CURL -o /tmp/body -w '%{http_code}' "$BASE$2" 2>/dev/null || true)"; body="$(cat /tmp/body 2>/dev/null || true)"
+  if [ "$got" = "$3" ] && { [ -z "${4:-}" ] || [ "$body" = "$4" ]; }; then echo "  ok   $MODE: $1"
+  else echo "  FAIL $MODE: $1 (expected $3${4:+ $4}, got $got${body:+: $(printf '%.40s' "$body")})"; F=$((F + 1)); fi
+}
+headers() { # headers <label> <path> <want HSTS: yes|no> [curl args...]
+  label="$1"; path="$2"; hsts="$3"; shift 3
+  h="$($CURL -D - -o /dev/null "$@" "$BASE$path" 2>/dev/null | tr -d '\r')"
+  bad=""
+  printf '%s\n' "$h" | grep -qix 'x-content-type-options: nosniff' || bad="$bad nosniff"
+  printf '%s\n' "$h" | grep -qix 'x-frame-options: DENY' || bad="$bad x-frame-options"
+  [ "$(printf '%s\n' "$h" | grep -ic '^x-frame-options:')" = 1 ] || bad="$bad one-x-frame-options"
+  printf '%s\n' "$h" | grep -qix "content-security-policy: frame-ancestors 'none'" || bad="$bad csp"
+  printf '%s\n' "$h" | grep -qix 'referrer-policy: same-origin' || bad="$bad referrer-policy"
+  if [ "$hsts" = yes ]; then printf '%s\n' "$h" | grep -qix 'strict-transport-security: max-age=15552000' || bad="$bad hsts"
+  else printf '%s\n' "$h" | grep -qi '^strict-transport-security:' && bad="$bad unexpected-hsts"; fi
+  if [ -z "$bad" ]; then echo "  ok   $MODE: headers on $label"
+  else echo "  FAIL $MODE: headers on $label:$bad"; F=$((F + 1)); fi
+}
+for p in '/rest/private;x=y/users/current' '/rest;x/private/users/current' '/rest/private/users/current;x' \
+    '/rest/private%3Bx/users/current' '/rest/private%3bx/users/current' '/rest%2Fprivate/users/current' \
+    '/rest/private%2fusers/current' '/rest/private%5Cusers/current' '/rest\private/users/current' \
+    '/files;x/app.apk' '/files/app.apk;x' '/files/a%2F..%2Fb.apk' '/agent/ws/dev-1;x' '/REST/private;x/users/current'; do
+  status "$p: refused at the edge" "$p" 400 ""
+done
+status "/rest/private/users/current: proxied" /rest/private/users/current 200 server
+status "a query string with ; and escapes: proxied" '/rest/public/name?x=;%3B%2F%5C' 200 server
+status "/files/my%20app.apk: proxied" '/files/my%20app.apk' 200 server
+status "/files/agent.apk: the supervisor's mirror" /files/agent.apk 200 supervisor
+status "/devices/a;b: still the SPA" '/devices/a;b' 200 spa
+if [ "$KIND" = https ]; then HSTS=yes; else HSTS=no; fi
+headers "/ (the console)" / "$HSTS"
+headers "/rest (the server's own X-Frame-Options replaced)" /rest/public/name "$HSTS"
+headers "/recovery" /recovery "$HSTS"
+headers "a refused path" '/rest/private;x/users/current' "$HSTS"
+if [ "$KIND" != https ]; then
+  headers "/ behind a proxy that says X-Forwarded-Proto: https" / yes -H 'X-Forwarded-Proto: https'
+fi
+unstub 8080
+headers "the error fallback while the server is down" /rest/public/name "$HSTS"
+exit "$F"
+PROBE
+)"
+for setup in "own domain (HTTPS)|https|SITE_ADDRESS=localhost" ":80 (tunnel, LAN, dev stack, own proxy)|http|SITE_ADDRESS=:80"; do
+  IFS='|' read -r label kind envs <<< "$setup"
+  echo "Ambiguous paths and security headers ($label):"
+  out="$(docker run --rm --network none --add-host server:127.0.0.1 --add-host supervisor:127.0.0.1 \
+      -e "MODE=$label" -e "KIND=$kind" -e "$envs" -e ACME_EMAIL= -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" \
+      "$CADDY_IMAGE" sh -c "$EDGE_PROBE" 2>&1)" && rc=0 || rc=$?
+  printf '%s\n' "$out"
+  n="$(grep -c '^  FAIL' <<<"$out" || true)"
+  FAILED=$((FAILED + n))
+  if [ "$rc" -ne 0 ] && [ "$n" -eq 0 ]; then fail "ambiguous paths and headers ($label): probe container exited $rc"; fi
 done
 
 # What the caddy service gets from each compose combination. Tunnel mode believes CF-Connecting-IP from any private

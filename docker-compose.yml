@@ -86,6 +86,9 @@ services:
       # The hosting mode: in tunnel mode (cloudflare) the edge believes cloudflared's CF-Connecting-IP
       # (docker/edge-peers.sh).
       COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
+      # Proxies in front of the edge (a CDN, a load balancer) whose X-Forwarded-For it believes, as space-separated
+      # CIDRs; set in .env. Unset or empty: none (docs/OPERATIONS.md, Sign-in limits).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     volumes:
       - caddy_data:/data
       - caddy_config:/config

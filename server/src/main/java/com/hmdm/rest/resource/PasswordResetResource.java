@@ -29,7 +29,7 @@ import com.hmdm.persistence.domain.Settings;
 import com.hmdm.persistence.domain.User;
 import com.hmdm.persistence.domain.UserRole;
 import com.hmdm.rest.json.Response;
-import com.hmdm.rest.resource.support.WindowLimiter;
+import com.hmdm.util.WindowLimiter;
 import com.hmdm.security.SecurityContext;
 import com.hmdm.service.EmailService;
 import com.hmdm.util.PasswordResetTokens;
@@ -71,7 +71,7 @@ public class PasswordResetResource {
     /** Recovery mails per account per hour: enough to retry, too few to flood someone's inbox. */
     static final int RECOVERY_MAILS_PER_HOUR = 3;
     private final WindowLimiter recoveryMails =
-            new WindowLimiter(System::currentTimeMillis, 60L * 60 * 1000, RECOVERY_MAILS_PER_HOUR);
+            new WindowLimiter(WindowLimiter.MONOTONIC, 60L * 60 * 1000, RECOVERY_MAILS_PER_HOUR);
 
     /**
      * <p>A constructor required by Swagger.</p>

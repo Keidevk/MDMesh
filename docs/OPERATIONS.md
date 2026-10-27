@@ -231,6 +231,109 @@ reverse_proxy 127.0.0.1:8080 {
 }
 ```
 
+## Sign-in limits
+
+Failed sign-ins are limited, for the console (`/rest/public/auth/login`), API clients (`/rest/public/jwt/login`) and
+the current-password check of a password or e-mail change (`/rest/private/users`), all together. A refused attempt
+isn't checked, even with the right password. Every refusal looks the same, whichever limit refused: the console says
+"Too many failed sign-ins"; the API answers `429` with `Retry-After: 900` (the 15-minute window; try again then).
+
+Each attempt is counted under the first of these that applies:
+
+- **Known browser.** Every completed sign-in, console or API, sets a cookie (`MDMESH_SIGNIN`, HttpOnly,
+  SameSite=Strict, sent only to `/rest/public`, 30 days, Secure when `BASE_URL` is https) that names the account. A
+  browser or API client that sends it back has its own limit: 10 failures in 15 minutes.
+- **Known address.** An address that completed a sign-in to the account in the last 30 days (up to 16 per account)
+  has its own limit for that account: 10 failures in 15 minutes. These failures don't count toward the account's
+  limit below; they come on top of it. So someone at an address you signed in from (a shared office NAT, say) gets 10
+  guesses per 15 minutes in addition to the account's 20: at most 20 + 10 per known address, 180 with all 16.
+- **Anything else.** Per address: 10 failures in 15 minutes, and 50 in 6 hours, across all accounts. Per account: 20
+  failures in 15 minutes, from all addresses together. While an account is over that limit, new browsers on new
+  addresses are refused for it, even with the right password.
+
+So someone failing sign-ins for your account locks out only browsers and addresses new to it. Your browser, your
+office or home, and the host your API client runs on keep signing in. A sign-in that names no account is limited the
+same way as one that does, so a refusal doesn't tell whether the account exists.
+
+An IPv6 address counts by its /56, so a household or a small site is one address and shares its limit. The limits
+are held in memory, at most 20,000 addresses, accounts, browsers and known addresses each. A flood of new addresses
+past that shares one coarse limit instead of being let through, so during such a flood new addresses can be refused
+more often, never less. Known browsers and known addresses aren't affected. Logins that name no account share 4,096
+counters, so a flood of made-up names can't fill memory or lock out a real account.
+
+Every attempt, refused or not, first looks the login up in the database. The limit doesn't shield the database from a
+flood of requests; a rate limit at your proxy does.
+
+### During an attack
+
+- Sign in from a browser or an address you signed in from before. Each limit lifts by itself as failures age out of
+  its window: a new browser on a new address waits until the attack has paused for 15 minutes.
+- A restart clears every limit at once (`docker compose restart server`; native: `systemctl restart mdmesh-server`).
+  It also forgets the known addresses, which become known again at their next sign-in. Known-browser cookies stay
+  valid.
+- API clients: keep the `MDMESH_SIGNIN` cookie from a sign-in and send it with the next one (for example
+  `curl -c jar -b jar`), or sign in from the same host each time.
+
+### The key that signs the cookies
+
+The cookies are signed with a key derived from the API signing key (`jwt.secretkey`, see
+[API signing key](#api-signing-key-jwt)) with HMAC and a fixed label. They stay valid across restarts and upgrades.
+Changing the API signing key (a new `SERVER_JWT_SECRET`, `docker compose down -v`, or a new `jwt.secretkey`) makes every
+cookie invalid, as it signs out every API client. A server with no `jwt.secretkey` of at least 32 characters (a dev
+setup from source) uses a key of its own process, logs a warning, and forgets every browser when it restarts.
+
+### The client address
+
+The address is the one your proxy reports in `X-Forwarded-For` (its last entry), never `CF-Connecting-IP`:
+
+- **Docker:** Caddy's view of the client, in every hosting mode.
+- **Native:** believed only from a proxy on loopback (the same host, not in a container), or one whose address you
+  list in `proxy.addresses`: run the installer with `PROXY_ADDRESSES=192.168.1.2` (comma-separated for several), or
+  edit `<Parameter name="proxy.addresses" value="192.168.1.2"/>` in `ROOT.xml` and restart the server. Installer
+  re-runs keep it. Write each address as Tomcat reports it: an IPv4 address as usual, an IPv6 one in full, uncompressed
+  form (`2001:db8:0:0:0:0:0:2`); no ranges. Any other client is limited by its own address, whatever it sends: on a
+  LAN-only install with no proxy, each browser on the LAN counts on its own.
+
+Two setups make every client look alike. The server logs a warning the first time it sees each one:
+
+- **A proxy that isn't listed** in `proxy.addresses`: on another host, or in a container on this one. This is the
+  expected effect of a missing entry: the server takes the proxy for a single client, so every client behind it
+  shares the proxy's address limit, and 10 failed sign-ins from anyone refuse every new browser for 15 minutes
+  (longer once there have been 50 in 6 hours). Browsers and addresses that signed in before keep signing in. The log names each such
+  peer: `A sign-in from <proxy> carried X-Forwarded-For, but <proxy> is not a trusted proxy`. Add that address to
+  `proxy.addresses` and restart the server. The server doesn't guess that a private peer sending the header is a
+  proxy: any LAN client can send one, and it would then pick its own address.
+- **A proxy that sends no `X-Forwarded-For`.** The server can't tell the clients behind it apart and limits by account
+  only. Set the header as in [Device public address](#device-public-address).
+
+**A CDN or another proxy in front of Docker's Caddy** (Cloudflare's proxy in own-domain mode, a load balancer): Caddy
+believes `X-Forwarded-For` only from the addresses in `TRUSTED_PROXIES`, by default none. Without them, Caddy reports
+the CDN as the client, and every client shares one address. Add the CDN's ranges, space-separated, to `.env` in the
+install directory, then run `docker compose up -d caddy`:
+
+```bash
+TRUSTED_PROXIES="173.245.48.0/20 103.21.244.0/22 2400:cb00::/32"
+```
+
+That line is an example: for Cloudflare, list every range on <https://www.cloudflare.com/ips/>, and update the list
+when Cloudflare changes it. The compose file passes `TRUSTED_PROXIES` from `.env` to the `caddy` service from v0.3.9
+on. Updates don't change your compose file, so on an install set up before v0.3.9, check with
+`grep TRUSTED_PROXIES docker-compose.yml`: if nothing is found, add this line under `caddy:` → `environment:`,
+indented like the lines there:
+
+```yaml
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+```
+
+The Cloudflare tunnel mode needs none of this: Caddy reads cloudflared's `CF-Connecting-IP` there.
+
+**IPv6 clients of a Docker own-domain install.** Docker's networks are IPv4-only by default. A client that connects
+to the host over IPv6 then reaches Caddy through Docker's port proxy, from the network's gateway address (such as
+`172.18.0.1`), so Caddy and the server see every IPv6 client as that one address, and all of them share one address
+limit. Nothing logs this. If your domain has an AAAA record, either turn on IPv6 for the stack's network
+(Docker's [IPv6 guide](https://docs.docker.com/engine/daemon/ipv6/)), or remove the AAAA record so clients use IPv4.
+The Cloudflare tunnel mode is not affected.
+
 ## Backups and restore
 
 **Docker.** One-click updates dump the database first, and a rollback restores that dump
@@ -392,7 +495,10 @@ It never touches apt packages, your proxy or the git checkout.
   authorized callers (the recovery token, or the session of an admin who may update: a super-admin, or the org admin
   of a single-customer install). Apply and rollback only recreate `server` and `caddy`.
 - Setting a password ends that account's other sessions and API tokens. Password reset links work once, for 24 hours.
-- The console session cookie is `SameSite=Lax`.
+- The console session cookie is `SameSite=Lax`, and `Secure` when `BASE_URL` is https.
+- Failed sign-ins are limited per address and per account ([Sign-in limits](#sign-in-limits)).
+- Responses carry no-framing, `nosniff`, `Referrer-Policy` and, on https, HSTS headers. A request path with a `;` or
+  an encoded separator or dot is refused (400).
 
 ### Native installs
 
@@ -406,7 +512,12 @@ It never touches apt packages, your proxy or the git checkout.
 ### API signing key (JWT)
 
 This key signs tokens for REST API clients (`/rest/public/jwt/login`); the console uses a session cookie. It is
-generated once and kept, so tokens survive restarts and upgrades.
+generated once and kept, so tokens survive restarts and upgrades. The sign-in limit's known-browser cookies are signed
+with a key derived from it, so changing it also makes every browser and API client new to that limit
+([Sign-in limits](#sign-in-limits)).
+
+A token sign-in also sets the `MDMESH_SIGNIN` cookie. An API client that keeps cookies and sends it with its next
+sign-in keeps signing in while someone else's failed sign-ins limit the account.
 
 - **Docker:** the key is kept in the server's data volume at `/opt/mdmesh/jwt.secret`, so `docker compose down -v`
   deletes it and API clients have to sign in again. To pin a key, set
