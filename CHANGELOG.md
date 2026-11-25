@@ -7,6 +7,18 @@ security issue has a Security section, and only such a release has one. Feature 
 weeks; patch releases (0.x.y) only for a security fix or something broken in the field. Each PR adds its line under
 Unreleased.
 
+## v0.6.1 — 2026-11-25
+
+Fixes
+- Installers: a source install whose saved updater repository (`GITHUB_REPO`) no longer matches the checkout's release
+  key kept serving an older agent APK. The enrollment QR's signing checksum then did not match the APK and the device
+  refused to enroll. The native installer and `setup.sh` now retry the release fetch against the checkout's own origin
+  and warn when they keep an existing APK.
+
+Under the hood
+- The t2-native rig verifies the release of the checkout's own repository (the pull request's head repository), not
+  upstream's, so a fork's key and its release match.
+
 ## v0.6.0 — 2026-11-23
 
 Upgrading
